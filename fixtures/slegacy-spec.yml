@@ -1,0 +1,50 @@
+version: 1
+
+tests:
+  # === Backend security ===
+
+  - name: "Auth signup/login are public"
+    match: { type: endpoint, pattern: "/api/v1/auth/*" }
+    expect:
+      guards: []
+
+  - name: "Roll endpoints require authentication"
+    match: { type: endpoint, pattern: "/api/v1/rolls/*" }
+    expect:
+      guards: [authenticated]
+
+  - name: "Session endpoints require authentication"
+    match: { type: endpoint, pattern: "/api/v1/sessions/*" }
+    expect:
+      guards: [authenticated]
+
+  - name: "User profile (own) requires authentication"
+    path:
+      from: { endpoint: "GET /api/v1/users/me" }
+    expect:
+      guards: [authenticated]
+
+  - name: "Health check exists and is public"
+    path:
+      from: { endpoint: "GET /health" }
+    expect:
+      guards: []
+
+  - name: "No debug endpoints exist"
+    match: { endpoint: "/debug/*" }
+    expect:
+      reachable: false
+
+  # === Frontend ===
+
+  - name: "Profile screen requires auth"
+    path:
+      from: { screen: ProfileScreen }
+    expect:
+      guards: [authenticated]
+
+  - name: "Auth screen exists"
+    path:
+      from: { screen: AuthScreen }
+    expect:
+      reachable: true
