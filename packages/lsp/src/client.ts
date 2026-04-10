@@ -128,23 +128,10 @@ export class LspClient {
     let result: unknown = null;
 
     if (message.method === "workspace/configuration") {
-      // Pyright requests python.analysis settings — must include extraPaths
-      // for project-internal module resolution (from app.services import X)
-      const params = message.params as { items?: Array<{ section?: string }> } | undefined;
-      result = (params?.items || []).map((item) => {
-        if (item?.section === "python.analysis") {
-          return {
-            extraPaths: [this.rootPath],
-            autoSearchPaths: true,
-          };
-        }
-        if (item?.section === "python") {
-          return {
-            pythonPath: this.rootPath ? `${this.rootPath}/.venv/bin/python` : undefined,
-          };
-        }
-        return {};
-      });
+      // Return null for each item — let pyrightconfig.json provide all settings.
+      // Returning non-null values can OVERRIDE the config file.
+      const params = message.params as { items?: unknown[] } | undefined;
+      result = (params?.items || []).map(() => null);
     } else if (message.method === "client/registerCapability") {
       // Server wants to register dynamic capabilities — accept
       result = null;
