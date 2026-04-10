@@ -9,8 +9,6 @@ import {
   INCLUDE_ROUTER_WITH_PREFIX_QUERY,
   INCLUDE_ROUTER_NO_PREFIX_QUERY,
   APIROUTER_CONSTRUCTOR_QUERY,
-  IMPORT_FROM_QUERY,
-  IMPORT_FROM_ALIASED_QUERY,
 } from "./queries.js";
 import { classifyGuard, classifyGuardBySource } from "./guards.js";
 import type { NameResolver } from "rayuela-core";
@@ -27,14 +25,8 @@ interface RouterInclusion {
   parentFile: string;
   parentVar: string;
   childVar: string;
-  includePrefix: string; // explicit prefix from include_router(..., prefix=...)
-}
-
-/** An import mapping: localVar in file → resolvedFile */
-interface ImportMapping {
-  file: string;
-  localVar: string;
-  resolvedFile: string;
+  childVarLine: number;
+  includePrefix: string;
 }
 
 export const fastapiAnalyzer: Analyzer = {
@@ -58,6 +50,7 @@ export const fastapiAnalyzer: Analyzer = {
     const nodes: GraphNode[] = [];
     const edges: GraphEdge[] = [];
     const warnings: AnalysisWarning[] = [];
+    const typedResolver = resolver as InstanceType<typeof NameResolver> | undefined;
 
     const pyFiles = await glob("**/*.py", { cwd: sourceDir, absolute: true });
 
@@ -75,39 +68,7 @@ export const fastapiAnalyzer: Analyzer = {
       }
     }
 
-    // === Pass 2: Collect import mappings ===
-    const importMappings: ImportMapping[] = [];
-    for (const file of pyFiles) {
-      const tree = parseFile(file);
-
-      // from app.api.auth import router
-      const directImports = queryTree(tree, IMPORT_FROM_QUERY);
-      for (const m of directImports) {
-        const modulePath = m.captures["module"]?.text;
-        const importName = m.captures["import_name"]?.text;
-        if (modulePath && importName) {
-          const resolvedFile = resolveModulePath(modulePath, sourceDir, pyFiles);
-          if (resolvedFile) {
-            importMappings.push({ file, localVar: importName, resolvedFile });
-          }
-        }
-      }
-
-      // from app.api.auth import router as auth_router
-      const aliasedImports = queryTree(tree, IMPORT_FROM_ALIASED_QUERY);
-      for (const m of aliasedImports) {
-        const modulePath = m.captures["module"]?.text;
-        const alias = m.captures["alias"]?.text;
-        if (modulePath && alias) {
-          const resolvedFile = resolveModulePath(modulePath, sourceDir, pyFiles);
-          if (resolvedFile) {
-            importMappings.push({ file, localVar: alias, resolvedFile });
-          }
-        }
-      }
-    }
-
-    // === Pass 3: Collect include_router calls ===
+    // === Pass 2: Collect include_router calls ===
     const inclusions: RouterInclusion[] = [];
     for (const file of pyFiles) {
       const tree = parseFile(file);
@@ -119,6 +80,7 @@ export const fastapiAnalyzer: Analyzer = {
           parentFile: file,
           parentVar: m.captures["app_var"]?.text || "",
           childVar: m.captures["router_var"]?.text || "",
+          childVarLine: m.startLine,
           includePrefix: m.captures["prefix"]?.text || "",
         });
       }
@@ -127,7 +89,6 @@ export const fastapiAnalyzer: Analyzer = {
       const noPrefix = queryTree(tree, INCLUDE_ROUTER_NO_PREFIX_QUERY);
       for (const m of noPrefix) {
         const childVar = m.captures["router_var"]?.text || "";
-        // Skip if already captured with prefix (the no-prefix query also matches with-prefix calls)
         const alreadyCaptured = inclusions.some(
           (inc) => inc.parentFile === file && inc.childVar === childVar
         );
@@ -136,13 +97,14 @@ export const fastapiAnalyzer: Analyzer = {
             parentFile: file,
             parentVar: m.captures["app_var"]?.text || "",
             childVar,
+            childVarLine: m.startLine,
             includePrefix: "",
           });
         }
       }
     }
 
-    // === Pass 4: Find route decorators and resolve full paths ===
+    // === Pass 3: Find route decorators and resolve full paths ===
     for (const file of pyFiles) {
       const tree = parseFile(file);
       const routes = queryTree(tree, ROUTE_DECORATOR_QUERY);
@@ -161,7 +123,7 @@ export const fastapiAnalyzer: Analyzer = {
           routerVar || "router",
           constructorPrefixes,
           inclusions,
-          importMappings,
+          typedResolver,
         );
         const fullPath = `${fullPrefix}${routePath === "/" ? "" : routePath}`;
 
@@ -171,12 +133,8 @@ export const fastapiAnalyzer: Analyzer = {
           .filter((g) => g.startLine >= route.startLine && g.endLine <= route.endLine)
           .map((g) => {
             const guardName = g.captures["guard_name"]?.text || "";
-            // Use source-based classification when resolver is available
-            if (resolver) {
-              return classifyGuardBySource(
-                guardName, file, g.startLine,
-                resolver as InstanceType<typeof NameResolver>,
-              );
+            if (typedResolver) {
+              return classifyGuardBySource(guardName, file, g.startLine, typedResolver);
             }
             return classifyGuard(guardName);
           })
@@ -200,94 +158,59 @@ export const fastapiAnalyzer: Analyzer = {
 
 /**
  * Resolve the full prefix chain for a router variable in a file.
- * Walks up the inclusion graph: child constructor prefix → include prefix → parent prefix → ...
+ * Uses Stack Graphs (when available) to resolve import bindings.
+ * Falls back to constructor prefix matching when resolver is unavailable.
  */
 function resolveFullPrefix(
   file: string,
   varName: string,
   constructorPrefixes: ConstructorPrefix[],
   inclusions: RouterInclusion[],
-  importMappings: ImportMapping[],
+  resolver?: InstanceType<typeof NameResolver>,
   visited: Set<string> = new Set(),
 ): string {
   const key = `${file}:${varName}`;
-  if (visited.has(key)) return ""; // cycle detection
+  if (visited.has(key)) return "";
   visited.add(key);
 
-  // Get this router's constructor prefix (if any)
+  // Get this router's constructor prefix
   const ownPrefix = constructorPrefixes.find(
     (cp) => cp.file === file && cp.varName === varName,
   )?.prefix || "";
 
   // Find who includes this file's router
-  // First, find all inclusions where the child var resolves to this file
   for (const inc of inclusions) {
-    // Resolve the child var to a file via imports
-    const childResolvedFile = resolveVarToFile(
-      inc.parentFile,
-      inc.childVar,
-      importMappings,
-    );
+    let childResolvedFile: string | undefined;
 
+    if (resolver) {
+      // PRINCIPLED: Use Stack Graphs to resolve the child variable to its source file
+      const def = resolver.findDefinition(inc.childVar, inc.parentFile, inc.childVarLine);
+      childResolvedFile = def?.file;
+    } else {
+      // FALLBACK (no resolver): Match by variable name convention
+      // e.g., "auth_router" or "auth" → file basename "auth.py"
+      const varBaseName = inc.childVar.replace(/_router$/, "");
+      const fileBaseName = path.basename(file, ".py");
+      if (fileBaseName === varBaseName || inc.childVar === fileBaseName) {
+        childResolvedFile = file;
+      }
+    }
+
+    // Check if this inclusion points to our file
     if (childResolvedFile === file) {
-      // Found: this file's router is included by inc.parentFile:inc.parentVar
       const parentPrefix = resolveFullPrefix(
         inc.parentFile,
         inc.parentVar,
         constructorPrefixes,
         inclusions,
-        importMappings,
+        resolver,
         visited,
       );
       return parentPrefix + inc.includePrefix + ownPrefix;
     }
   }
 
-  // No parent found — this is a root router (e.g., on the app object)
   return ownPrefix;
-}
-
-/**
- * Resolve a variable name in a file to the source file it was imported from.
- */
-function resolveVarToFile(
-  file: string,
-  varName: string,
-  importMappings: ImportMapping[],
-): string | undefined {
-  const mapping = importMappings.find(
-    (im) => im.file === file && im.localVar === varName,
-  );
-  return mapping?.resolvedFile;
-}
-
-/**
- * Convert a dotted Python module path to an absolute file path.
- * e.g., "app.api.auth" → "/source/app/api/auth.py" or "/source/app/api/auth/__init__.py"
- */
-function resolveModulePath(
-  modulePath: string,
-  sourceDir: string,
-  allFiles: string[],
-): string | undefined {
-  const relPath = modulePath.replace(/\./g, "/");
-
-  // Try direct .py file first
-  const pyFile = path.join(sourceDir, relPath + ".py");
-  if (allFiles.includes(pyFile)) return pyFile;
-
-  // Try __init__.py (package)
-  const initFile = path.join(sourceDir, relPath, "__init__.py");
-  if (allFiles.includes(initFile)) return initFile;
-
-  // Try matching with partial paths (handle cases where sourceDir nesting differs)
-  for (const f of allFiles) {
-    if (f.endsWith(relPath + ".py") || f.endsWith(relPath + "/__init__.py")) {
-      return f;
-    }
-  }
-
-  return undefined;
 }
 
 export default fastapiAnalyzer;

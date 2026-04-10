@@ -72,18 +72,5 @@ export const APIROUTER_CONSTRUCTOR_QUERY = `
         value: (string (string_content) @prefix)))))
 `;
 
-/** Matches from X import Y and from X import Y as Z */
-export const IMPORT_FROM_QUERY = `
-(import_from_statement
-  module_name: (dotted_name) @module
-  name: (dotted_name) @import_name)
-`;
-
-/** Matches aliased imports: from X import Y as Z */
-export const IMPORT_FROM_ALIASED_QUERY = `
-(import_from_statement
-  module_name: (dotted_name) @module
-  name: (aliased_import
-    name: (dotted_name) @original_name
-    alias: (identifier) @alias))
-`;
+// Import resolution is now handled by Stack Graphs (NameResolver).
+// No handwritten import queries needed.
