@@ -160,7 +160,7 @@ export const fastapiAnalyzer: Analyzer = {
 
         // Step 2: When LSP is available, also check parameter type annotations
         // for Annotated[Type, Depends(X)] aliases (e.g., SessionDep → Depends(get_db))
-        if (lspClient && guards.length === 0) {
+        if (lspClient) {
           try {
             const { resolveDefinition } = await import("@rayuela/lsp");
             // Find all identifiers in the handler's parameter range that could be type aliases
@@ -183,12 +183,14 @@ export const fastapiAnalyzer: Analyzer = {
               });
               if (!typeDef) continue;
 
-              // Search for Depends() at the type alias definition
+              // Search for Depends() on the EXACT line of the type alias definition
               try {
                 const aliasTree = parseFile(typeDef.file);
                 const aliasDepends = queryTree(aliasTree, ALL_DEPENDS_QUERY);
                 for (const ad of aliasDepends) {
-                  if (Math.abs((ad.captures["guard_name"]?.startLine || 0) - typeDef.line) > 2) continue;
+                  const guardLine = ad.captures["guard_name"]?.startLine || 0;
+                  // Must be on the exact same line as the type alias definition
+                  if (guardLine !== typeDef.line) continue;
                   const guardName = ad.captures["guard_name"]?.text || "";
                   if (!guardName || seenGuards.has(guardName)) continue;
                   seenGuards.add(guardName);
