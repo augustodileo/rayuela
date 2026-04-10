@@ -768,6 +768,7 @@ dependencies = [
  "serde",
  "serde_json",
  "stack-graphs",
+ "streaming-iterator",
  "tree-sitter",
  "tree-sitter-javascript",
  "tree-sitter-python",
