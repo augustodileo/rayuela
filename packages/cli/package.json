@@ -5,7 +5,7 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "rayuela": "dist/index.js"
+    "rayuela": "bin/rayuela.js"
   },
   "scripts": {
     "build": "tsc",

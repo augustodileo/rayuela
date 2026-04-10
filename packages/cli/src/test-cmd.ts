@@ -1,4 +1,4 @@
-import { AppGraph, NameResolver, TraceStore, validateSpec as validateSpecRust } from "rayuela-core";
+import { AppGraph, TraceStore, validateSpec as validateSpecRust } from "rayuela-core";
 import { getClient, shutdownAll } from "@rayuela/lsp";
 import { detectPlugins } from "./plugins.js";
 import { loadSpec } from "./spec-loader.js";
@@ -7,7 +7,7 @@ import { linkApiCalls } from "./linker.js";
 import { ensureDependencies } from "./deps.js";
 import type { GraphNode, GraphEdge, AnalyzerContext } from "@rayuela/sdk";
 
-export async function runTest(sourceDirs: string[], specPath: string, useLsp = true): Promise<boolean> {
+export async function runTest(sourceDirs: string[], specPath: string): Promise<boolean> {
   const allNodes: GraphNode[] = [];
   const allEdges: GraphEdge[] = [];
   const detectedNames = new Set<string>();
@@ -20,22 +20,15 @@ export async function runTest(sourceDirs: string[], specPath: string, useLsp = t
       const plugins = await detectPlugins(sourceDir);
       if (plugins.length === 0) continue;
 
-      if (useLsp) {
-        try {
-          const deps = await ensureDependencies(sourceDir);
-          const lang = plugins.some((p) => p.name === "fastapi") ? "python" : "typescript";
-          const lsp = await getClient(lang as "python" | "typescript", sourceDir, {
-            venvPath: deps.venvPath,
-            nodeModulesPath: deps.nodeModulesPath,
-          });
-          if (lsp) context.lspClient = lsp;
-        } catch {}
-      }
-
-      if (!context.lspClient) {
-        try { context.resolver = NameResolver.build(sourceDir); } catch {}
-      }
-      }
+      try {
+        const deps = await ensureDependencies(sourceDir);
+        const lang = plugins.some((p) => p.name === "fastapi") ? "python" : "typescript";
+        const lsp = await getClient(lang as "python" | "typescript", sourceDir, {
+          venvPath: deps.venvPath,
+          nodeModulesPath: deps.nodeModulesPath,
+        });
+        if (lsp) context.lspClient = lsp;
+      } catch {}
 
       for (const plugin of plugins) {
         detectedNames.add(plugin.name);

@@ -5,14 +5,12 @@ import path from "node:path";
 import type { Analyzer, AnalyzerContext, AnalysisResult, GraphNode, GraphEdge, AnalysisWarning } from "@rayuela/sdk";
 import {
   ROUTE_DECORATOR_QUERY,
-  DEPENDS_GUARD_QUERY,
   ALL_DEPENDS_QUERY,
   INCLUDE_ROUTER_WITH_PREFIX_QUERY,
   INCLUDE_ROUTER_NO_PREFIX_QUERY,
   APIROUTER_CONSTRUCTOR_QUERY,
 } from "./queries.js";
-import { classifyGuard, classifyGuardBySource } from "./guards.js";
-import type { NameResolver } from "rayuela-core";
+import { classifyGuard } from "./guards.js";
 
 /** Maps a router variable in a file to its constructor prefix */
 interface ConstructorPrefix {
@@ -51,7 +49,6 @@ export const fastapiAnalyzer: Analyzer = {
     const nodes: GraphNode[] = [];
     const edges: GraphEdge[] = [];
     const warnings: AnalysisWarning[] = [];
-    const typedResolver = context?.resolver as InstanceType<typeof NameResolver> | undefined;
     const lspClient = context?.lspClient;
     const traceStore = context?.traceStore as InstanceType<typeof import("rayuela-core").TraceStore> | undefined;
 
@@ -138,7 +135,6 @@ export const fastapiAnalyzer: Analyzer = {
           routerVar || "router",
           constructorPrefixes,
           inclusions,
-          typedResolver,
         );
         const combinedPath = `${fullPrefix}${routePath === "/" ? "" : routePath}`;
         const fullPath = combinedPath || "/";
@@ -243,17 +239,7 @@ export const fastapiAnalyzer: Analyzer = {
               } catch { /* LSP not available */ }
             }
 
-            if (!callTree && typedResolver) {
-              // Fallback: Stack Graphs + tree-sitter (handles common Python patterns)
-              try {
-                const { buildCallTreeDeterministic } = await import("@rayuela/lsp");
-                callTree = await buildCallTreeDeterministic(
-                  typedResolver,
-                  { file, line: handlerLine, col: 10 },
-                  absSourceDir, 3,
-                );
-              } catch { /* Stack Graphs not available */ }
-            }
+            // No fallback — LSP (Pyright) is the single resolution path
 
             if (callTree) {
               const { flattenCallTree } = await import("@rayuela/lsp");
@@ -301,53 +287,36 @@ export const fastapiAnalyzer: Analyzer = {
  * Uses Stack Graphs (when available) to resolve import bindings.
  * Falls back to constructor prefix matching when resolver is unavailable.
  */
+/**
+ * Resolve the full URL prefix for a router by walking the include chain.
+ * Uses tree-sitter-discovered constructor prefixes and include_router calls.
+ * Router variable → file mapping via basename convention (auth_router → auth.py).
+ */
 function resolveFullPrefix(
   file: string,
   varName: string,
   constructorPrefixes: ConstructorPrefix[],
   inclusions: RouterInclusion[],
-  resolver?: InstanceType<typeof NameResolver>,
   visited: Set<string> = new Set(),
 ): string {
   const key = `${file}:${varName}`;
   if (visited.has(key)) return "";
   visited.add(key);
 
-  // Get this router's constructor prefix
   const ownPrefix = constructorPrefixes.find(
     (cp) => cp.file === file && cp.varName === varName,
   )?.prefix || "";
 
-  // Find who includes this file's router
   for (const inc of inclusions) {
-    let childResolvedFile: string | undefined;
+    // Match by variable name convention: auth_router → auth.py
+    const varBaseName = inc.childVar.replace(/_router$/, "");
+    const fileBaseName = path.basename(file, ".py");
+    if (fileBaseName !== varBaseName && inc.childVar !== fileBaseName) continue;
 
-    if (resolver) {
-      // PRINCIPLED: Use Stack Graphs to resolve the child variable to its source file
-      const def = resolver.findDefinition(inc.childVar, inc.parentFile, inc.childVarLine);
-      childResolvedFile = def?.file;
-    } else {
-      // FALLBACK (no resolver): Match by variable name convention
-      // e.g., "auth_router" or "auth" → file basename "auth.py"
-      const varBaseName = inc.childVar.replace(/_router$/, "");
-      const fileBaseName = path.basename(file, ".py");
-      if (fileBaseName === varBaseName || inc.childVar === fileBaseName) {
-        childResolvedFile = file;
-      }
-    }
-
-    // Check if this inclusion points to our file
-    if (childResolvedFile === file) {
-      const parentPrefix = resolveFullPrefix(
-        inc.parentFile,
-        inc.parentVar,
-        constructorPrefixes,
-        inclusions,
-        resolver,
-        visited,
-      );
-      return parentPrefix + inc.includePrefix + ownPrefix;
-    }
+    const parentPrefix = resolveFullPrefix(
+      inc.parentFile, inc.parentVar, constructorPrefixes, inclusions, visited,
+    );
+    return parentPrefix + inc.includePrefix + ownPrefix;
   }
 
   return ownPrefix;
