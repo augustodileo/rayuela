@@ -48,6 +48,12 @@ importers:
 
   packages/cli:
     dependencies:
+      '@rayuela/analyzer-expo-router':
+        specifier: workspace:*
+        version: link:../analyzers/expo-router
+      '@rayuela/analyzer-fastapi':
+        specifier: workspace:*
+        version: link:../analyzers/fastapi
       '@rayuela/sdk':
         specifier: workspace:*
         version: link:../sdk
