@@ -14,9 +14,9 @@ const screens: GraphNode[] = [
 const allNodes = [...endpoints, ...screens];
 
 describe("linkApiCalls (fallback)", () => {
-  it("resolves unresolved api.X.Y to matching endpoint by module name", () => {
+  it("resolves unresolved module.method to matching endpoint", () => {
     const edges: GraphEdge[] = [
-      { type: "calls", from: "HomeScreen", to: "api.items.list", source: { file: "home.tsx", line: 5 }, conditions: [] },
+      { type: "calls", from: "HomeScreen", to: "items.list", source: { file: "home.tsx", line: 5 }, conditions: [] },
     ];
     const result = linkApiCalls(allNodes, edges);
     expect(result[0].to).toBe("GET /api/v1/items");
@@ -38,11 +38,11 @@ describe("linkApiCalls (fallback)", () => {
     expect(result[0].to).toBe("ProfileScreen");
   });
 
-  it("leaves unresolvable api edges unchanged", () => {
+  it("leaves unresolvable edges unchanged", () => {
     const edges: GraphEdge[] = [
-      { type: "calls", from: "HomeScreen", to: "api.unknown.action", source: { file: "home.tsx", line: 11 }, conditions: [] },
+      { type: "calls", from: "HomeScreen", to: "unknown.action", source: { file: "home.tsx", line: 11 }, conditions: [] },
     ];
     const result = linkApiCalls(allNodes, edges);
-    expect(result[0].to).toBe("api.unknown.action");
+    expect(result[0].to).toBe("unknown.action");
   });
 });

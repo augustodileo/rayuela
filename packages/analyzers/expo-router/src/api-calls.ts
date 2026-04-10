@@ -1,14 +1,22 @@
 import { parseFile, queryTree } from "rayuela-core";
 import type { GraphEdge } from "@rayuela/sdk";
 
-/** Tree-sitter query: api.module.method() calls */
-const API_CALL_QUERY = `
+/** Tree-sitter query: api.module.method() calls (nested pattern) */
+const API_CALL_NESTED_QUERY = `
 (call_expression
   function: (member_expression
     object: (member_expression
       object: (identifier) @api_obj
       (#eq? @api_obj "api")
       property: (property_identifier) @module)
+    property: (property_identifier) @method))
+`;
+
+/** Tree-sitter query: module.method() calls (flat pattern — auth.signup, rolls.list, etc.) */
+const API_CALL_FLAT_QUERY = `
+(call_expression
+  function: (member_expression
+    object: (identifier) @module
     property: (property_identifier) @method))
 `;
 
@@ -32,17 +40,48 @@ const AUTH_STORE_QUERY = `
   (#match? @hook "^use.*[Aa]uth"))
 `;
 
-export function detectApiCalls(file: string, screenName: string): GraphEdge[] {
-  const tree = parseFile(file);
-  const matches = queryTree(tree, API_CALL_QUERY);
+/** Known API module names to filter flat calls (avoids matching router.push, etc.) */
+const DEFAULT_API_MODULES = new Set(["api", "auth", "users", "rolls", "sessions", "items"]);
 
-  return matches.map((m) => ({
-    type: "calls" as const,
-    from: screenName,
-    to: `api.${m.captures["module"]?.text}.${m.captures["method"]?.text}`,
-    source: { file, line: m.startLine },
-    conditions: [],
-  }));
+export function detectApiCalls(
+  file: string,
+  screenName: string,
+  apiModules?: Set<string>,
+): GraphEdge[] {
+  const tree = parseFile(file);
+  const knownModules = apiModules || DEFAULT_API_MODULES;
+  const edges: GraphEdge[] = [];
+  const seen = new Set<string>();
+
+  // Nested: api.module.method() — key uses module.method (matching parser output)
+  for (const m of queryTree(tree, API_CALL_NESTED_QUERY)) {
+    const key = `${m.captures["module"]?.text}.${m.captures["method"]?.text}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      edges.push({
+        type: "calls", from: screenName, to: key,
+        source: { file, line: m.startLine }, conditions: [],
+      });
+    }
+  }
+
+  // Flat: module.method() where module is a known API namespace
+  for (const m of queryTree(tree, API_CALL_FLAT_QUERY)) {
+    const module = m.captures["module"]?.text;
+    const method = m.captures["method"]?.text;
+    if (module && method && knownModules.has(module)) {
+      const key = `${module}.${method}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        edges.push({
+          type: "calls", from: screenName, to: key,
+          source: { file, line: m.startLine }, conditions: [],
+        });
+      }
+    }
+  }
+
+  return edges;
 }
 
 export function detectNavigations(file: string, screenName: string): GraphEdge[] {

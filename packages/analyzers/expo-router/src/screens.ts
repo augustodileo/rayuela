@@ -25,10 +25,22 @@ export function fileToRoute(filePath: string, appDir: string): { route: string; 
 
   // Generate screen name from file name
   const baseName = path.basename(filePath, path.extname(filePath));
-  const screenName =
-    baseName === "index"
-      ? dirToScreenName(relative || ".")
-      : baseName.replace(/^\[/, "").replace(/\]$/, "") + "Screen";
+  let screenName: string;
+  if (baseName === "index") {
+    screenName = dirToScreenName(relative || ".");
+  } else if (baseName.startsWith("[") && baseName.endsWith("]")) {
+    // Dynamic route: include parent dir for uniqueness
+    // roll/[id].tsx → "RollDetailScreen", session/[id].tsx → "SessionDetailScreen"
+    const parentDir = path.basename(path.dirname(filePath));
+    const cleanParent = parentDir.replace(/^\(|\)$/g, ""); // strip route groups
+    if (cleanParent && cleanParent !== "app") {
+      screenName = cleanParent.charAt(0).toUpperCase() + cleanParent.slice(1) + "DetailScreen";
+    } else {
+      screenName = baseName.replace(/^\[/, "").replace(/\]$/, "") + "Screen";
+    }
+  } else {
+    screenName = baseName + "Screen";
+  }
 
   // PascalCase
   const name = screenName

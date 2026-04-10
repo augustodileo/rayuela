@@ -112,11 +112,13 @@ export const fastapiAnalyzer: Analyzer = {
 
       for (const route of routes) {
         const method = route.captures["http_method"]?.text?.toUpperCase();
-        const routePath = route.captures["route_path"]?.text;
+        // route_str includes quotes: '""' or '"/items"'. Strip them to get the path.
+        const routeStr = route.captures["route_str"]?.text || '""';
+        const routePath = routeStr.replace(/^["']|["']$/g, "");
         const handlerName = route.captures["handler_name"]?.text;
         const routerVar = route.captures["router_var"]?.text;
 
-        if (!method || !routePath || !handlerName) continue;
+        if (!method || routePath === undefined || !handlerName) continue;
 
         // Resolve the full prefix chain for this file's router
         const fullPrefix = resolveFullPrefix(
@@ -126,7 +128,8 @@ export const fastapiAnalyzer: Analyzer = {
           inclusions,
           typedResolver,
         );
-        const fullPath = `${fullPrefix}${routePath === "/" ? "" : routePath}`;
+        const combinedPath = `${fullPrefix}${routePath === "/" ? "" : routePath}`;
+        const fullPath = combinedPath || "/";
 
         // Find Depends() guards in this handler's parameters
         const guardMatches = queryTree(tree, DEPENDS_GUARD_QUERY);

@@ -1,4 +1,5 @@
-/** Matches @router.METHOD("path") decorated functions in FastAPI */
+/** Matches @router.METHOD("path") decorated functions in FastAPI.
+ *  Uses (string) instead of (string (string_content)) to also match empty string routes "". */
 export const ROUTE_DECORATOR_QUERY = `
 (decorated_definition
   (decorator
@@ -8,7 +9,7 @@ export const ROUTE_DECORATOR_QUERY = `
         attribute: (identifier) @http_method
         (#match? @http_method "^(get|post|put|delete|patch|options|head)$"))
       arguments: (argument_list
-        (string (string_content) @route_path))))
+        (string) @route_str)))
   definition: (function_definition
     name: (identifier) @handler_name
     parameters: (parameters) @params))

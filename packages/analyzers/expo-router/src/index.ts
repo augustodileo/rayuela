@@ -27,6 +27,13 @@ export const expoRouterAnalyzer: Analyzer = {
     // Parse API client to get deterministic endpoint mapping
     const apiMapping = await findAndParseApiClient(sourceDir);
 
+    // Extract known API module names from the mapping for call detection
+    const apiModules = new Set<string>(["api"]);
+    for (const key of apiMapping.keys()) {
+      const module = key.split(".")[0];
+      if (module) apiModules.add(module);
+    }
+
     const screens = await discoverScreens(sourceDir);
 
     for (const screen of screens) {
@@ -42,7 +49,7 @@ export const expoRouterAnalyzer: Analyzer = {
       });
 
       // Detect API calls and resolve via parsed client mapping
-      const apiCalls = detectApiCalls(screen.file, screen.name);
+      const apiCalls = detectApiCalls(screen.file, screen.name, apiModules);
       for (const call of apiCalls) {
         const resolvedEndpoint = apiMapping.get(call.to);
         if (resolvedEndpoint) {

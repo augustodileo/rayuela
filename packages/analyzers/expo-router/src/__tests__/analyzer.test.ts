@@ -23,10 +23,10 @@ describe("fileToRoute", () => {
     expect(r.name).toBe("ProfileScreen");
   });
 
-  it("converts dynamic route", () => {
+  it("converts dynamic route with parent dir context", () => {
     const r = fileToRoute(path.join(appDir, "item/[id].tsx"), appDir);
     expect(r.route).toBe("/item/:id");
-    expect(r.name).toBe("IdScreen");
+    expect(r.name).toBe("ItemDetailScreen");
   });
 
   it("converts auth screen", () => {
