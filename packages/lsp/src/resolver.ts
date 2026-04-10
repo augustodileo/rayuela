@@ -53,6 +53,29 @@ const PY_VAR_ASSIGNMENT = `
     function: (identifier) @class_name))
 `;
 
+/** Python: find self.attr.method() calls — instance attribute method access */
+const PY_SELF_ATTR_METHOD_CALL = `
+(await
+  (call
+    function: (attribute
+      object: (attribute
+        object: (identifier) @self_ref
+        (#eq? @self_ref "self")
+        attribute: (identifier) @attr_name)
+      attribute: (identifier) @method_name)))
+`;
+
+/** Python: find self.attr = Class(args) assignments in __init__ */
+const PY_SELF_ATTR_ASSIGNMENT = `
+(assignment
+  left: (attribute
+    object: (identifier) @self_ref
+    (#eq? @self_ref "self")
+    attribute: (identifier) @attr_name)
+  right: (call
+    function: (identifier) @class_name))
+`;
+
 /**
  * Build a call tree for a Python function using Stack Graphs + tree-sitter.
  * No LSP required.
@@ -160,6 +183,42 @@ export async function buildCallTreeDeterministic(
         sourceDir, maxDepth - 1, visited,
       );
       if (child) rootNode.children.push(child);
+    }
+
+    // Pattern 3: await self.attr.method(args) — instance attribute calls
+    // Resolve by finding self.attr = Class(args) in the enclosing class __init__
+    const selfMethodCalls = queryTree(tree, PY_SELF_ATTR_METHOD_CALL)
+      .filter(m => {
+        const line = m.captures["method_name"]?.startLine;
+        return line && line >= fnLine && line <= fnEndLine;
+      });
+
+    if (selfMethodCalls.length > 0) {
+      // Build self.attr → Class mapping from __init__ in the same file
+      const selfAttrMap = new Map<string, string>();
+      const selfAssignments = queryTree(tree, PY_SELF_ATTR_ASSIGNMENT);
+      for (const a of selfAssignments) {
+        const attr = a.captures["attr_name"]?.text;
+        const cls = a.captures["class_name"]?.text;
+        if (attr && cls) selfAttrMap.set(attr, cls);
+      }
+
+      for (const call of selfMethodCalls) {
+        const attrName = call.captures["attr_name"]?.text;
+        const methodName = call.captures["method_name"]?.text;
+        const callLine = call.captures["method_name"]?.startLine;
+        if (!attrName || !methodName || !callLine) continue;
+
+        const className = selfAttrMap.get(attrName);
+        if (!className) continue; // Unknown attribute type
+
+        const child = await resolveClassMethod(
+          resolver, parseFile, queryTree,
+          position.file, callLine, className, methodName,
+          sourceDir, maxDepth - 1, visited,
+        );
+        if (child) rootNode.children.push(child);
+      }
     }
   }
 
