@@ -1,19 +1,21 @@
-import { AppGraph, NameResolver, validateSpec as validateSpecRust } from "rayuela-core";
-import { getClient, detectLanguage, shutdownAll } from "@rayuela/lsp";
+import { AppGraph, NameResolver, TraceStore, TraceKind, validateSpec as validateSpecRust } from "rayuela-core";
+import { getClient, shutdownAll } from "@rayuela/lsp";
 import { detectPlugins } from "./plugins.js";
 import { loadSpec } from "./spec-loader.js";
 import { formatTestResults } from "./formatters/text.js";
 import { linkApiCalls } from "./linker.js";
+import { ensureDependencies } from "./deps.js";
 import type { GraphNode, GraphEdge, AnalyzerContext } from "@rayuela/sdk";
 
 export async function runTest(sourceDirs: string[], specPath: string, useLsp = true): Promise<boolean> {
   const allNodes: GraphNode[] = [];
   const allEdges: GraphEdge[] = [];
   const detectedNames = new Set<string>();
+  const traceStore = new TraceStore();
 
   try {
     for (const sourceDir of sourceDirs) {
-      const context: AnalyzerContext = {};
+      const context: AnalyzerContext = { traceStore };
 
       try {
         context.resolver = NameResolver.build(sourceDir);
@@ -22,10 +24,14 @@ export async function runTest(sourceDirs: string[], specPath: string, useLsp = t
       }
 
       if (useLsp) {
+        const deps = await ensureDependencies(sourceDir);
         const plugins = await detectPlugins(sourceDir);
         const lang = plugins.some((p) => p.name === "fastapi") ? "python" : "typescript";
         try {
-          const lsp = await getClient(lang as "python" | "typescript", sourceDir);
+          const lsp = await getClient(lang as "python" | "typescript", sourceDir, {
+            venvPath: deps.venvPath,
+            nodeModulesPath: deps.nodeModulesPath,
+          });
           if (lsp) context.lspClient = lsp;
         } catch {
           // LSP not available

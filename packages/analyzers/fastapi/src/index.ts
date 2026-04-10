@@ -52,6 +52,7 @@ export const fastapiAnalyzer: Analyzer = {
     const warnings: AnalysisWarning[] = [];
     const typedResolver = context?.resolver as InstanceType<typeof NameResolver> | undefined;
     const lspClient = context?.lspClient;
+    const traceStore = context?.traceStore as InstanceType<typeof import("rayuela-core").TraceStore> | undefined;
 
     const pyFiles = await glob("**/*.py", { cwd: sourceDir, absolute: true });
 
@@ -179,6 +180,30 @@ export const fastapiAnalyzer: Analyzer = {
             }
           } catch {
             // LSP call hierarchy not available for this handler
+          }
+        }
+
+        // Build trace for this endpoint
+        if (traceStore) {
+          try {
+            const { TraceKind } = await import("rayuela-core");
+            const guardHashes: string[] = [];
+            for (const guard of guards) {
+              const gh = traceStore.insertLeaf(
+                guard, file, route.startLine,
+                TraceKind.Guard, [`guard:${guard}`],
+              );
+              guardHashes.push(gh);
+            }
+            const endpointHash = traceStore.insert(
+              nodeId, file, route.startLine,
+              TraceKind.Endpoint,
+              guards.map((g: string) => `guard:${g}`),
+              guardHashes,
+            );
+            traceStore.addRoot(endpointHash);
+          } catch {
+            // TraceStore not available
           }
         }
       }

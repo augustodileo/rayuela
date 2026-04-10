@@ -26,6 +26,11 @@ function isCommandAvailable(cmd: string): boolean {
   }
 }
 
+export interface LspClientOptions {
+  venvPath?: string;
+  nodeModulesPath?: string;
+}
+
 /**
  * Get or create an LSP client for a given language and source directory.
  * Returns null if the language server is not available.
@@ -33,6 +38,7 @@ function isCommandAvailable(cmd: string): boolean {
 export async function getClient(
   language: Language,
   sourceDir: string,
+  options?: LspClientOptions,
 ): Promise<LspClient | null> {
   const absDir = resolve(sourceDir);
   const key = `${language}:${absDir}`;
@@ -50,11 +56,22 @@ export async function getClient(
     return null;
   }
 
-  // Spawn the language server process (inherit PATH for pnpm-installed binaries)
+  // Build environment with venv/node_modules paths if provided
+  const env = { ...process.env };
+  if (options?.venvPath && language === "python") {
+    // Tell Pyright where the Python interpreter is
+    env.VIRTUAL_ENV = options.venvPath;
+    env.PATH = `${options.venvPath}/bin:${env.PATH}`;
+  }
+  if (options?.nodeModulesPath && (language === "typescript" || language === "tsx")) {
+    env.NODE_PATH = options.nodeModulesPath;
+  }
+
+  // Spawn the language server process
   const proc = spawn(serverConfig.cmd, serverConfig.args, {
     stdio: ["pipe", "pipe", "pipe"],
     cwd: absDir,
-    env: { ...process.env },
+    env,
   });
 
   const client = new LspClient(proc);
