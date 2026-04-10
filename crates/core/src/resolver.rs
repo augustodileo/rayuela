@@ -3,10 +3,8 @@ use napi_derive::napi;
 use stack_graphs::graph::StackGraph;
 use stack_graphs::partial::PartialPaths;
 use stack_graphs::stitching::{Database, DatabaseCandidates, ForwardPartialPathStitcher, StitcherConfig};
-use tree_sitter_stack_graphs::{Variables, FILE_PATH_VAR};
+use tree_sitter_stack_graphs::{Variables, FILE_PATH_VAR, ROOT_PATH_VAR};
 use tree_sitter_stack_graphs::loader::LanguageConfiguration;
-// tree_sitter_stack_graphs::NoCancellation for TSG building
-// stack_graphs::NoCancellation for stitcher
 use stack_graphs::graph::Node;
 use stack_graphs::arena::Handle;
 use std::path::Path;
@@ -33,7 +31,10 @@ impl NameResolver {
     /// computes partial paths, and stores them in an in-memory database.
     #[napi(factory)]
     pub fn build(source_dir: String) -> Result<NameResolver> {
-        let source_path = Path::new(&source_dir);
+        let source_path = std::fs::canonicalize(Path::new(&source_dir)).map_err(|e| {
+            Error::new(Status::GenericFailure, format!("Failed to canonicalize {source_dir}: {e}"))
+        })?;
+        let root_path_str = source_path.to_string_lossy().to_string();
         let tsg_cancel = tree_sitter_stack_graphs::NoCancellation;
         let sg_cancel = stack_graphs::NoCancellation;
 
@@ -54,7 +55,7 @@ impl NameResolver {
         merge_builtins(&mut graph, &ts_config);
         merge_builtins(&mut graph, &tsx_config);
 
-        let files = walkdir(source_path);
+        let files = walkdir(&source_path);
         let mut indexed = 0u32;
         let mut errors = 0u32;
 
@@ -69,19 +70,24 @@ impl NameResolver {
 
             let Some(config) = config else { continue };
 
-            let source = match std::fs::read_to_string(entry) {
+            // Canonicalize file path for consistent module resolution
+            let canonical = match std::fs::canonicalize(entry) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            let file_str = canonical.to_string_lossy().to_string();
+
+            let source = match std::fs::read_to_string(&canonical) {
                 Ok(s) => s,
                 Err(_) => continue,
             };
 
-            let file_str = entry.to_string_lossy().to_string();
             let file_handle = graph.get_or_create_file(&file_str);
 
-            // Set up globals with FILE_PATH
+            // Set up globals with FILE_PATH and ROOT_PATH
             let mut globals = Variables::new();
-            if let Err(_) = globals.add(FILE_PATH_VAR.into(), file_str.clone().into()) {
-                // Variable already set, ignore
-            }
+            let _ = globals.add(FILE_PATH_VAR.into(), file_str.clone().into());
+            let _ = globals.add(ROOT_PATH_VAR.into(), root_path_str.clone().into());
 
             // Build stack graph for this file
             let build_result = config.sgl.build_stack_graph_into(
@@ -132,11 +138,17 @@ impl NameResolver {
 
     /// Find where a symbol is defined, given the file and line where it's referenced.
     /// Uses the Stack Graphs path stitching algorithm to resolve cross-file references.
+    /// If line is 0, searches all reference nodes for the symbol in the file.
     #[napi]
     pub fn find_definition(&mut self, symbol: String, file: String, line: u32) -> Option<SymbolLocation> {
-        let file_handle = self.graph.get_file(&file)?;
+        // Try both the raw path and canonicalized path
+        let canonical = std::fs::canonicalize(&file).ok();
+        let canonical_str = canonical.as_ref().map(|p| p.to_string_lossy().to_string());
+        let file_handle = self.graph.get_file(&file)
+            .or_else(|| canonical_str.as_ref().and_then(|c| self.graph.get_file(c)))?;
+        let lookup_file = canonical_str.as_deref().unwrap_or(&file);
 
-        // Find reference nodes at the given location that match the symbol
+        // Find reference nodes matching the symbol
         let reference_nodes: Vec<Handle<Node>> = self.graph
             .nodes_for_file(file_handle)
             .filter(|&node| {
@@ -144,23 +156,21 @@ impl NameResolver {
                 if !n.is_reference() {
                     return false;
                 }
-                // Check if this node is at the right line
-                if let Some(source_info) = self.graph.source_info(node) {
-                    let node_line = source_info.span.start.line as u32 + 1; // 0-indexed to 1-indexed
-                    if node_line != line {
+                // If line > 0, filter by line
+                if line > 0 {
+                    if let Some(source_info) = self.graph.source_info(node) {
+                        let node_line = source_info.span.start.line as u32 + 1;
+                        if node_line != line {
+                            return false;
+                        }
+                    } else {
                         return false;
                     }
-                } else {
-                    return false;
                 }
                 // Check if the symbol matches
                 match n {
-                    Node::PushScopedSymbol(psn) => {
-                        &self.graph[psn.symbol] == symbol.as_str()
-                    }
-                    Node::PushSymbol(pn) => {
-                        &self.graph[pn.symbol] == symbol.as_str()
-                    }
+                    Node::PushScopedSymbol(psn) => &self.graph[psn.symbol] == symbol.as_str(),
+                    Node::PushSymbol(pn) => &self.graph[pn.symbol] == symbol.as_str(),
                     _ => false,
                 }
             })
@@ -210,7 +220,14 @@ impl NameResolver {
             },
         );
 
-        // Return the first definition found (most specific)
+        // Prefer definitions in OTHER files (cross-file resolution)
+        // over same-file definitions (import bindings)
+        let cross_file = definitions.iter().find(|d| d.file != lookup_file);
+        if let Some(def) = cross_file {
+            return Some(def.clone());
+        }
+
+        // Fall back to any definition found
         definitions.into_iter().next()
     }
 
@@ -322,22 +339,113 @@ mod tests {
         );
         let mut resolver = NameResolver::build(fixture_dir.to_string()).unwrap();
 
-        // items.py imports get_current_user_id from infra/auth.py
+        // items.py uses get_current_user_id in Depends() on line 11
         let items_file = format!("{}/app/api/items.py", fixture_dir);
+
+        // Resolve get_current_user_id from its import line
         let result = resolver.find_definition(
             "get_current_user_id".to_string(),
             items_file,
-            3, // import line
+            3, // import line: from app.infra.auth import get_current_user_id
         );
 
-        // If Stack Graphs resolved it, we should get a location in infra/auth.py
-        // Note: this may return None if the TSG rules don't cover this pattern yet
-        if let Some(loc) = &result {
-            eprintln!("Resolved get_current_user_id to {}:{}", loc.file, loc.line);
-            assert!(loc.file.contains("auth.py"));
-        } else {
-            eprintln!("find_definition returned None — Stack Graphs may need tuning");
-            // Don't fail the test — this is expected for early implementation
+        // Stack Graphs resolves the import to the actual definition in infra/auth.py
+        let loc = result.expect("find_definition should resolve cross-file import");
+        assert!(loc.file.contains("infra/auth.py"), "Expected auth.py, got {}", loc.file);
+        assert_eq!(loc.line, 9, "get_current_user_id is defined on line 9");
+    }
+
+    #[test]
+    #[ignore] // diagnostic test — run manually with: cargo test test_debug_dump_nodes -- --ignored --nocapture
+    fn test_debug_dump_nodes() {
+        let fixture_dir = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/fastapi-app"
+        );
+        let resolver = NameResolver::build(fixture_dir.to_string()).unwrap();
+
+        let items_file_path = format!("{}/app/api/items.py", fixture_dir);
+
+        // Dump all files registered
+        eprintln!("\n=== Registered files ===");
+        for fh in resolver.graph.iter_files() {
+            eprintln!("  File: {}", resolver.graph[fh].name());
+        }
+
+        // Find the items.py file handle
+        let items_file = resolver.graph.get_file(&items_file_path);
+        eprintln!("\n=== Looking for file: {} ===", items_file_path);
+        eprintln!("  Found: {}", items_file.is_some());
+
+        if let Some(fh) = items_file {
+            eprintln!("\n=== Nodes in items.py ===");
+            for node in resolver.graph.nodes_for_file(fh) {
+                let n = &resolver.graph[node];
+                let is_ref = n.is_reference();
+                let is_def = n.is_definition();
+                if !is_ref && !is_def {
+                    continue;
+                }
+                let symbol = match n {
+                    Node::PushScopedSymbol(psn) => Some(&resolver.graph[psn.symbol]),
+                    Node::PushSymbol(pn) => Some(&resolver.graph[pn.symbol]),
+                    Node::PopScopedSymbol(psn) => Some(&resolver.graph[psn.symbol]),
+                    Node::PopSymbol(pn) => Some(&resolver.graph[pn.symbol]),
+                    _ => None,
+                };
+                let source_info = resolver.graph.source_info(node);
+                let line = source_info.map(|si| si.span.start.line as u32 + 1).unwrap_or(0);
+                let col = source_info.map(|si| si.span.start.column.utf8_offset as u32).unwrap_or(0);
+                eprintln!(
+                    "  {} {} @ line {} col {} — symbol: {:?}",
+                    if is_ref { "REF" } else { "DEF" },
+                    match n {
+                        Node::PushScopedSymbol(_) => "PushScopedSymbol",
+                        Node::PushSymbol(_) => "PushSymbol",
+                        Node::PopScopedSymbol(_) => "PopScopedSymbol",
+                        Node::PopSymbol(_) => "PopSymbol",
+                        _ => "Other",
+                    },
+                    line, col,
+                    symbol,
+                );
+            }
+        }
+
+        // Also dump auth.py definitions
+        let auth_file_path = format!("{}/app/infra/auth.py", fixture_dir);
+        if let Some(fh) = resolver.graph.get_file(&auth_file_path) {
+            eprintln!("\n=== Nodes in infra/auth.py ===");
+            for node in resolver.graph.nodes_for_file(fh) {
+                let n = &resolver.graph[node];
+                let is_ref = n.is_reference();
+                let is_def = n.is_definition();
+                if !is_ref && !is_def {
+                    continue;
+                }
+                let symbol = match n {
+                    Node::PushScopedSymbol(psn) => Some(&resolver.graph[psn.symbol]),
+                    Node::PushSymbol(pn) => Some(&resolver.graph[pn.symbol]),
+                    Node::PopScopedSymbol(psn) => Some(&resolver.graph[psn.symbol]),
+                    Node::PopSymbol(pn) => Some(&resolver.graph[pn.symbol]),
+                    _ => None,
+                };
+                let source_info = resolver.graph.source_info(node);
+                let line = source_info.map(|si| si.span.start.line as u32 + 1).unwrap_or(0);
+                eprintln!(
+                    "  {} {} @ line {} — symbol: {:?}",
+                    if is_ref { "REF" } else { "DEF" },
+                    match n {
+                        Node::PushScopedSymbol(_) => "PushScopedSymbol",
+                        Node::PushSymbol(_) => "PushSymbol",
+                        Node::PopScopedSymbol(_) => "PopScopedSymbol",
+                        Node::PopSymbol(_) => "PopSymbol",
+                        _ => "Other",
+                    },
+                    line,
+                    symbol,
+                );
+            }
         }
     }
 
