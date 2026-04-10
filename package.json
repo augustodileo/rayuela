@@ -1,0 +1,10 @@
+{
+  "name": "rayuela",
+  "private": true,
+  "scripts": {
+    "build:rust": "cd crates/core && napi build --platform --release",
+    "build:ts": "pnpm -r run build",
+    "test:rust": "cargo test",
+    "test:ts": "pnpm -r run test"
+  }
+}
