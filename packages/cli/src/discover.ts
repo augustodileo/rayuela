@@ -1,5 +1,6 @@
 import { detectPlugins } from "./plugins.js";
 import { formatDiscovery } from "./formatters/text.js";
+import { linkApiCalls } from "./linker.js";
 import type { GraphNode, GraphEdge } from "@rayuela/sdk";
 
 export async function runDiscover(sourceDirs: string[]): Promise<void> {
@@ -26,9 +27,14 @@ export async function runDiscover(sourceDirs: string[]): Promise<void> {
     return;
   }
 
+  // Link frontend API calls to backend endpoints
+  const linkedEdges = linkApiCalls(allNodes, allEdges);
+
   console.log(formatDiscovery(allNodes, [...detectedNames]));
 
   const endpointCount = allNodes.filter((n) => n.type === "endpoint").length;
   const screenCount = allNodes.filter((n) => n.type === "screen").length;
-  console.log(`  Discovered: ${endpointCount} endpoints, ${screenCount} screens, ${allEdges.length} edges`);
+  const linkedCount = linkedEdges.filter((e) => !e.to.startsWith("api.")).length;
+  const totalEdgeCount = linkedEdges.length;
+  console.log(`  Discovered: ${endpointCount} endpoints, ${screenCount} screens, ${totalEdgeCount} edges (${linkedCount} linked)`);
 }
