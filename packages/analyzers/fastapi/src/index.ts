@@ -179,16 +179,15 @@ export const fastapiAnalyzer: Analyzer = {
               ));
             }
 
-            // When LSP is available, build deep call tree from handler body
-            if (lspClient && handlerName) {
+            // Build deep call tree using Stack Graphs + tree-sitter (deterministic)
+            if (typedResolver) {
               try {
-                const { buildCallTreeViaDefinitions, flattenCallTree } = await import("@rayuela/lsp");
+                const { buildCallTreeDeterministic, flattenCallTree } = await import("@rayuela/lsp");
                 const absSourceDir = path.resolve(sourceDir);
-
-                // Find the handler function position from tree-sitter
                 const handlerLine = route.captures?.["handler_name"]?.startLine ?? route.startLine;
-                const callTree = await buildCallTreeViaDefinitions(
-                  lspClient as any,
+
+                const callTree = await buildCallTreeDeterministic(
+                  typedResolver,
                   { file, line: handlerLine, col: 10 },
                   absSourceDir,
                   3,
@@ -218,7 +217,7 @@ export const fastapiAnalyzer: Analyzer = {
                   }
                 }
               } catch {
-                // LSP not available for this handler
+                // Deterministic tracing not available
               }
             }
 
