@@ -56,6 +56,13 @@ function getCacheDir(sourceDir: string, lockfileContent: string): string {
  * Install Python dependencies via uv or pip.
  */
 async function ensurePythonDeps(sourceDir: string, pyprojectPath: string): Promise<string | undefined> {
+  // 1. Check for existing venv in project
+  const existingVenv = join(sourceDir, ".venv");
+  if (existsSync(join(existingVenv, "bin", "python"))) {
+    return existingVenv;
+  }
+
+  // 2. Try uv sync (requires uv.lock)
   const uvLockPath = join(sourceDir, "uv.lock");
   const hasUv = existsSync(uvLockPath) && isCommandAvailable("uv");
 
@@ -77,19 +84,41 @@ async function ensurePythonDeps(sourceDir: string, pyprojectPath: string): Promi
         env: { ...process.env, UV_PROJECT_ENVIRONMENT: venvPath },
         timeout: 120000,
       });
-      // Write marker so we skip next time
       writeFileSync(markerFile, new Date().toISOString());
       return venvPath;
     } catch (e: any) {
       console.log(`  WARN  uv sync failed: ${e.stderr?.toString().trim() || e.message}`);
-      return undefined;
     }
   }
 
-  // Fallback: check if venv already exists in project
-  const existingVenv = join(sourceDir, ".venv");
-  if (existsSync(join(existingVenv, "bin", "python"))) {
-    return existingVenv;
+  // 3. Try uv pip install from pyproject.toml (no lockfile needed)
+  if (isCommandAvailable("uv")) {
+    const pyContent = readFileSync(pyprojectPath, "utf-8");
+    const cacheDir = getCacheDir(sourceDir, pyContent);
+    const venvPath = join(cacheDir, ".venv");
+    const markerFile = join(cacheDir, ".rayuela-installed");
+
+    if (existsSync(markerFile)) {
+      return venvPath;
+    }
+
+    console.log("  Installing Python dependencies (uv pip)...");
+    try {
+      if (!existsSync(join(venvPath, "bin", "python"))) {
+        execSync(`uv venv "${venvPath}"`, { stdio: "ignore", timeout: 30000 });
+      }
+      execSync(`uv pip install -e "${sourceDir}" --quiet`, {
+        cwd: sourceDir,
+        stdio: ["ignore", "ignore", "pipe"],
+        env: { ...process.env, VIRTUAL_ENV: venvPath },
+        timeout: 120000,
+      });
+      writeFileSync(markerFile, new Date().toISOString());
+      return venvPath;
+    } catch (e: any) {
+      console.log(`  WARN  uv pip install failed: ${e.stderr?.toString().trim() || e.message}`);
+      return undefined;
+    }
   }
 
   return undefined;

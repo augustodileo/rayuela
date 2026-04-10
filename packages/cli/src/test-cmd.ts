@@ -1,4 +1,4 @@
-import { AppGraph, NameResolver, TraceStore, TraceKind, validateSpec as validateSpecRust } from "rayuela-core";
+import { AppGraph, NameResolver, TraceStore, validateSpec as validateSpecRust } from "rayuela-core";
 import { getClient, shutdownAll } from "@rayuela/lsp";
 import { detectPlugins } from "./plugins.js";
 import { loadSpec } from "./spec-loader.js";
@@ -17,28 +17,23 @@ export async function runTest(sourceDirs: string[], specPath: string, useLsp = t
     for (const sourceDir of sourceDirs) {
       const context: AnalyzerContext = { traceStore };
 
-      try {
-        context.resolver = NameResolver.build(sourceDir);
-      } catch {
-        // Stack Graphs not available
-      }
+      const plugins = await detectPlugins(sourceDir);
+      if (plugins.length === 0) continue;
+
+      try { context.resolver = NameResolver.build(sourceDir); } catch {}
 
       if (useLsp) {
-        const deps = await ensureDependencies(sourceDir);
-        const plugins = await detectPlugins(sourceDir);
-        const lang = plugins.some((p) => p.name === "fastapi") ? "python" : "typescript";
         try {
+          const deps = await ensureDependencies(sourceDir);
+          const lang = plugins.some((p) => p.name === "fastapi") ? "python" : "typescript";
           const lsp = await getClient(lang as "python" | "typescript", sourceDir, {
             venvPath: deps.venvPath,
             nodeModulesPath: deps.nodeModulesPath,
           });
           if (lsp) context.lspClient = lsp;
-        } catch {
-          // LSP not available
-        }
+        } catch {}
       }
 
-      const plugins = await detectPlugins(sourceDir);
       for (const plugin of plugins) {
         detectedNames.add(plugin.name);
         const result = await plugin.analyze(sourceDir, context);
@@ -53,25 +48,18 @@ export async function runTest(sourceDirs: string[], specPath: string, useLsp = t
     }
 
     const linkedEdges = linkApiCalls(allNodes, allEdges);
-
     const graph = new AppGraph();
     for (const node of allNodes) {
       graph.addNode({
-        nodeType: node.type,
-        id: node.id,
-        file: node.source.file,
-        line: node.source.line,
-        guards: node.guards,
-        conditions: node.conditions,
+        nodeType: node.type, id: node.id,
+        file: node.source.file, line: node.source.line,
+        guards: node.guards, conditions: node.conditions,
       });
     }
     for (const edge of linkedEdges) {
       graph.addEdge({
-        edgeType: edge.type,
-        fromId: edge.from,
-        toId: edge.to,
-        file: edge.source.file,
-        line: edge.source.line,
+        edgeType: edge.type, fromId: edge.from, toId: edge.to,
+        file: edge.source.file, line: edge.source.line,
       });
     }
 
@@ -83,9 +71,7 @@ export async function runTest(sourceDirs: string[], specPath: string, useLsp = t
 
     const specTests = await loadSpec(specPath);
     const results = validateSpecRust(graph, specTests);
-
     console.log(formatTestResults(results));
-
     return results.every((r) => r.passed);
   } finally {
     await shutdownAll();
