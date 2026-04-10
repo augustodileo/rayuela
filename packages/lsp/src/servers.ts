@@ -6,7 +6,7 @@ import { LspClient } from "./client.js";
 type Language = "python" | "typescript" | "tsx";
 
 const SERVER_COMMANDS: Record<Language, { cmd: string; args: string[] }> = {
-  python: { cmd: "pyright-langserver", args: ["--stdio"] },
+  python: { cmd: "jedi-language-server", args: [] },  // Jedi: better project module resolution
   typescript: { cmd: "typescript-language-server", args: ["--stdio"] },
   tsx: { cmd: "typescript-language-server", args: ["--stdio"] },
 };
@@ -51,24 +51,35 @@ export async function getClient(
   const serverConfig = SERVER_COMMANDS[language];
   if (!serverConfig) return null;
 
-  // Check if server is available
-  if (!isCommandAvailable(serverConfig.cmd)) {
-    return null;
-  }
-
-  // Build environment with venv/node_modules paths if provided
+  // Build environment with venv paths
   const env = { ...process.env };
+  let cmd = serverConfig.cmd;
+
   if (options?.venvPath && language === "python") {
-    // Tell Pyright where the Python interpreter is
     env.VIRTUAL_ENV = options.venvPath;
     env.PATH = `${options.venvPath}/bin:${env.PATH}`;
+    // Try venv's jedi-language-server first, then global pyright
+    const venvCmd = `${options.venvPath}/bin/${serverConfig.cmd}`;
+    if (isCommandAvailable(venvCmd)) {
+      cmd = venvCmd;
+    } else if (!isCommandAvailable(serverConfig.cmd)) {
+      // Try pyright as fallback
+      if (isCommandAvailable("pyright-langserver")) {
+        cmd = "pyright-langserver";
+        serverConfig.args = ["--stdio"];
+      } else {
+        return null;
+      }
+    }
+  } else if (!isCommandAvailable(serverConfig.cmd)) {
+    return null;
   }
   if (options?.nodeModulesPath && (language === "typescript" || language === "tsx")) {
     env.NODE_PATH = options.nodeModulesPath;
   }
 
   // Spawn the language server process
-  const proc = spawn(serverConfig.cmd, serverConfig.args, {
+  const proc = spawn(cmd, serverConfig.args, {
     stdio: ["pipe", "pipe", "pipe"],
     cwd: absDir,
     env,
@@ -84,13 +95,22 @@ export async function getClient(
   // Build initialization options (e.g., Pyright venv settings)
   const initOptions: Record<string, unknown> = {};
   if (options?.venvPath && language === "python") {
-    // Tell Pyright where the virtualenv is
     initOptions.python = {
       pythonPath: `${options.venvPath}/bin/python`,
-      venvPath: resolve(options.venvPath, ".."),
-      venv: ".venv",
+      analysis: {
+        extraPaths: [absDir],
+        autoSearchPaths: true,
+      },
     };
-    initOptions.pythonPath = `${options.venvPath}/bin/python`;
+    initOptions.settings = {
+      python: {
+        pythonPath: `${options.venvPath}/bin/python`,
+        analysis: {
+          extraPaths: [absDir],
+          autoSearchPaths: true,
+        },
+      },
+    };
   }
 
   // Initialize with the source directory as root

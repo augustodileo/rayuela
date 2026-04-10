@@ -25,6 +25,7 @@ export class LspClient {
   private buffer = "";
   private initialized = false;
   private openedFiles = new Set<string>();
+  private rootPath = "";
 
   constructor(process: ChildProcess) {
     this.process = process;
@@ -115,6 +116,7 @@ export class LspClient {
       initializationOptions: initOptions,
     } as InitializeParams;
 
+    this.rootPath = rootPath;
     const result = await this.sendRequest<InitializeResult>("initialize", params);
     this.sendNotification("initialized", {});
     this.initialized = true;
@@ -126,9 +128,23 @@ export class LspClient {
     let result: unknown = null;
 
     if (message.method === "workspace/configuration") {
-      // Pyright requests configuration. Return empty settings for each item.
-      const params = message.params as { items?: unknown[] } | undefined;
-      result = (params?.items || []).map(() => ({}));
+      // Pyright requests python.analysis settings — must include extraPaths
+      // for project-internal module resolution (from app.services import X)
+      const params = message.params as { items?: Array<{ section?: string }> } | undefined;
+      result = (params?.items || []).map((item) => {
+        if (item?.section === "python.analysis") {
+          return {
+            extraPaths: [this.rootPath],
+            autoSearchPaths: true,
+          };
+        }
+        if (item?.section === "python") {
+          return {
+            pythonPath: this.rootPath ? `${this.rootPath}/.venv/bin/python` : undefined,
+          };
+        }
+        return {};
+      });
     } else if (message.method === "client/registerCapability") {
       // Server wants to register dynamic capabilities — accept
       result = null;
