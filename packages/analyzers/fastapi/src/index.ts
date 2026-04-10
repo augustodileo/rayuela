@@ -6,6 +6,7 @@ import type { Analyzer, AnalyzerContext, AnalysisResult, GraphNode, GraphEdge, A
 import {
   ROUTE_DECORATOR_QUERY,
   DEPENDS_GUARD_QUERY,
+  ALL_DEPENDS_QUERY,
   INCLUDE_ROUTER_WITH_PREFIX_QUERY,
   INCLUDE_ROUTER_NO_PREFIX_QUERY,
   APIROUTER_CONSTRUCTOR_QUERY,
@@ -142,18 +143,47 @@ export const fastapiAnalyzer: Analyzer = {
         const combinedPath = `${fullPrefix}${routePath === "/" ? "" : routePath}`;
         const fullPath = combinedPath || "/";
 
-        // Find Depends() guards in this handler's parameters
-        const guardMatches = queryTree(tree, DEPENDS_GUARD_QUERY);
-        const guards = guardMatches
-          .filter((g) => g.startLine >= route.startLine && g.endLine <= route.endLine)
-          .map((g) => {
-            const guardName = g.captures["guard_name"]?.text || "";
-            if (typedResolver) {
-              return classifyGuardBySource(guardName, file, g.startLine, typedResolver);
+        // Find ALL Depends() calls — parameters, Annotated types, decorator dependencies
+        const guardQuery = ALL_DEPENDS_QUERY;
+        const guardMatches = queryTree(tree, guardQuery);
+        const handlerEndLine = route.endLine || route.startLine + 20;
+
+        const guards: string[] = [];
+        const seenGuards = new Set<string>();
+        for (const g of guardMatches) {
+          // Only process guards within this handler's range (including decorator)
+          if (g.startLine < route.startLine - 1 || g.startLine > handlerEndLine) continue;
+          const guardName = g.captures["guard_name"]?.text || "";
+          if (!guardName || seenGuards.has(guardName)) continue;
+          seenGuards.add(guardName);
+
+          let classified: string | null = null;
+          if (lspClient) {
+            // Pyright resolves the guard function — classify by its source
+            try {
+              const { resolveDefinition } = await import("@rayuela/lsp");
+              const def = await resolveDefinition(lspClient as any, {
+                file, line: g.captures["guard_name"]?.startLine || g.startLine,
+                col: g.captures["guard_name"]?.startCol || 0,
+              });
+              if (def && def.file.includes("/auth")) {
+                classified = "authenticated";
+              } else if (def && (def.file.includes("/admin") || def.file.includes("/permission"))) {
+                classified = "role_check";
+              } else if (def) {
+                // Resolved but not an auth file — check the function name
+                classified = classifyGuard(guardName);
+              }
+            } catch {
+              classified = classifyGuard(guardName);
             }
-            return classifyGuard(guardName);
-          })
-          .filter((g): g is string => g !== null);
+          } else if (typedResolver) {
+            classified = classifyGuardBySource(guardName, file, g.startLine, typedResolver);
+          } else {
+            classified = classifyGuard(guardName);
+          }
+          if (classified) guards.push(classified);
+        }
 
         const nodeId = `${method} ${fullPath || "/"}`;
         nodes.push({

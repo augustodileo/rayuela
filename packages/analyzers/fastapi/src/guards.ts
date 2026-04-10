@@ -101,20 +101,22 @@ export function classifyGuardBySource(
   }
 }
 
-/** Classify a guard function name into a human-readable guard type (heuristic fallback).
- *  Returns null for non-auth dependencies (filtered out by caller). */
+/** Classify a guard function from Depends().
+ *  Returns null ONLY for known non-auth dependencies (get_db, etc.).
+ *  Unknown dependencies are treated as guards (return the function name). */
 export function classifyGuard(guardName: string): string | null {
   const name = guardName.toLowerCase();
 
-  // Known non-auth dependencies
+  // Known non-auth dependencies — definitely not guards
   if (NON_AUTH_DEPS.includes(name)) {
     return null;
   }
 
+  // Classify known auth patterns into human-readable types
   if (name.includes("current_user") || name.includes("user_id") || name.includes("auth")) {
     return "authenticated";
   }
-  if (name.includes("admin")) {
+  if (name.includes("admin") || name.includes("superuser")) {
     return "role:admin";
   }
   if (name.includes("role") || name.includes("permission")) {
@@ -124,6 +126,6 @@ export function classifyGuard(guardName: string): string | null {
     return "api_key";
   }
 
-  // Unknown dependency — not a guard
-  return null;
+  // Unknown Depends() — likely a guard, return the function name
+  return guardName;
 }

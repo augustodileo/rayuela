@@ -15,7 +15,7 @@ export const ROUTE_DECORATOR_QUERY = `
     parameters: (parameters) @params))
 `;
 
-/** Matches Depends(guard_function) in function parameters (typed and untyped) */
+/** Matches Depends(guard_function) in parameters (typed and untyped) — fallback when no LSP */
 export const DEPENDS_GUARD_QUERY = `
 [
   (default_parameter
@@ -31,6 +31,15 @@ export const DEPENDS_GUARD_QUERY = `
       arguments: (argument_list
         (identifier) @guard_name)))
 ]
+`;
+
+/** Universal: finds ALL Depends(X) calls anywhere — parameters, Annotated types, decorator dependencies */
+export const ALL_DEPENDS_QUERY = `
+(call
+  function: (identifier) @dep_func
+  (#eq? @dep_func "Depends")
+  arguments: (argument_list
+    (identifier) @guard_name))
 `;
 
 /** Matches include_router(router_var, prefix="/...") with explicit prefix */
