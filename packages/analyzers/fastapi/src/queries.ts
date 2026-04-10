@@ -33,13 +33,33 @@ export const DEPENDS_GUARD_QUERY = `
 ]
 `;
 
-/** Universal: finds ALL Depends(X) calls anywhere — parameters, Annotated types, decorator dependencies */
+/** Universal: finds ALL Depends(X) and Security(X) calls anywhere.
+ *  Handles: Depends(func), Security(func), Depends(func(...)), Security(mod.func) */
 export const ALL_DEPENDS_QUERY = `
-(call
-  function: (identifier) @dep_func
-  (#eq? @dep_func "Depends")
-  arguments: (argument_list
-    (identifier) @guard_name))
+[
+  (call
+    function: (identifier) @dep_func
+    (#match? @dep_func "^(Depends|Security)$")
+    arguments: (argument_list
+      (identifier) @guard_name))
+  (call
+    function: (identifier) @dep_func
+    (#match? @dep_func "^(Depends|Security)$")
+    arguments: (argument_list
+      (attribute) @guard_name))
+  (call
+    function: (identifier) @dep_func
+    (#match? @dep_func "^(Depends|Security)$")
+    arguments: (argument_list
+      (call
+        function: (identifier) @guard_name)))
+  (call
+    function: (identifier) @dep_func
+    (#match? @dep_func "^(Depends|Security)$")
+    arguments: (argument_list
+      (call
+        function: (attribute) @guard_name)))
+]
 `;
 
 /** Matches include_router(router_var, prefix="/...") with explicit prefix */
