@@ -143,46 +143,61 @@ export const fastapiAnalyzer: Analyzer = {
         const combinedPath = `${fullPrefix}${routePath === "/" ? "" : routePath}`;
         const fullPath = combinedPath || "/";
 
-        // Find ALL Depends() calls — parameters, Annotated types, decorator dependencies
-        const guardQuery = ALL_DEPENDS_QUERY;
-        const guardMatches = queryTree(tree, guardQuery);
+        // Step 1: Find ALL direct Depends() calls in this handler's range
+        const guardMatches = queryTree(tree, ALL_DEPENDS_QUERY);
         const handlerEndLine = route.endLine || route.startLine + 20;
-
         const guards: string[] = [];
         const seenGuards = new Set<string>();
+
         for (const g of guardMatches) {
-          // Only process guards within this handler's range (including decorator)
           if (g.startLine < route.startLine - 1 || g.startLine > handlerEndLine) continue;
           const guardName = g.captures["guard_name"]?.text || "";
           if (!guardName || seenGuards.has(guardName)) continue;
           seenGuards.add(guardName);
-
-          let classified: string | null = null;
-          if (lspClient) {
-            // Pyright resolves the guard function — classify by its source
-            try {
-              const { resolveDefinition } = await import("@rayuela/lsp");
-              const def = await resolveDefinition(lspClient as any, {
-                file, line: g.captures["guard_name"]?.startLine || g.startLine,
-                col: g.captures["guard_name"]?.startCol || 0,
-              });
-              if (def && def.file.includes("/auth")) {
-                classified = "authenticated";
-              } else if (def && (def.file.includes("/admin") || def.file.includes("/permission"))) {
-                classified = "role_check";
-              } else if (def) {
-                // Resolved but not an auth file — check the function name
-                classified = classifyGuard(guardName);
-              }
-            } catch {
-              classified = classifyGuard(guardName);
-            }
-          } else if (typedResolver) {
-            classified = classifyGuardBySource(guardName, file, g.startLine, typedResolver);
-          } else {
-            classified = classifyGuard(guardName);
-          }
+          const classified = classifyGuard(guardName);
           if (classified) guards.push(classified);
+        }
+
+        // Step 2: When LSP is available, also check parameter type annotations
+        // for Annotated[Type, Depends(X)] aliases (e.g., SessionDep → Depends(get_db))
+        if (lspClient && guards.length === 0) {
+          try {
+            const { resolveDefinition } = await import("@rayuela/lsp");
+            // Find all identifiers in the handler's parameter range that could be type aliases
+            const paramIdentifiers = queryTree(tree, `(identifier) @id`)
+              .filter(m => {
+                const line = m.captures["id"]?.startLine;
+                return line && line >= route.startLine && line <= route.startLine + 10;
+              });
+
+            for (const pid of paramIdentifiers) {
+              const typeName = pid.captures["id"]?.text;
+              const typeLine = pid.captures["id"]?.startLine;
+              const typeCol = pid.captures["id"]?.startCol;
+              if (!typeName || !typeLine || typeCol === undefined) continue;
+              if (seenGuards.has(typeName)) continue;
+
+              // Follow the type alias via Pyright
+              const typeDef = await resolveDefinition(lspClient as any, {
+                file, line: typeLine, col: typeCol,
+              });
+              if (!typeDef) continue;
+
+              // Search for Depends() at the type alias definition
+              try {
+                const aliasTree = parseFile(typeDef.file);
+                const aliasDepends = queryTree(aliasTree, ALL_DEPENDS_QUERY);
+                for (const ad of aliasDepends) {
+                  if (Math.abs((ad.captures["guard_name"]?.startLine || 0) - typeDef.line) > 2) continue;
+                  const guardName = ad.captures["guard_name"]?.text || "";
+                  if (!guardName || seenGuards.has(guardName)) continue;
+                  seenGuards.add(guardName);
+                  const classified = classifyGuard(guardName);
+                  if (classified) guards.push(classified);
+                }
+              } catch { /* couldn't parse alias file */ }
+            }
+          } catch { /* LSP not available */ }
         }
 
         const nodeId = `${method} ${fullPath || "/"}`;
