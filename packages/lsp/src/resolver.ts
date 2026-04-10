@@ -76,6 +76,23 @@ const PY_SELF_ATTR_ASSIGNMENT = `
     function: (identifier) @class_name))
 `;
 
+/** Python: plain function call (no await): func(args) — e.g., create_access_token(user.id) */
+const PY_PLAIN_FUNC_CALL = `
+(call
+  function: (identifier) @call_func)
+`;
+
+/** Python: plain self.attr.method(args) (no await) — e.g., self.dispatcher.dispatch(...) */
+const PY_PLAIN_SELF_ATTR_CALL = `
+(call
+  function: (attribute
+    object: (attribute
+      object: (identifier) @self_ref
+      (#eq? @self_ref "self")
+      attribute: (identifier) @attr_name)
+    attribute: (identifier) @method_name))
+`;
+
 /**
  * Build a call tree for a Python function using Stack Graphs + tree-sitter.
  * No LSP required.
@@ -210,7 +227,7 @@ export async function buildCallTreeDeterministic(
         if (!attrName || !methodName || !callLine) continue;
 
         const className = selfAttrMap.get(attrName);
-        if (!className) continue; // Unknown attribute type
+        if (!className) continue;
 
         const child = await resolveClassMethod(
           resolver, parseFile, queryTree,
@@ -219,6 +236,70 @@ export async function buildCallTreeDeterministic(
         );
         if (child) rootNode.children.push(child);
       }
+
+      // Also check non-awaited self.attr.method() (e.g., self.dispatcher.dispatch())
+      const plainSelfCalls = queryTree(tree, PY_PLAIN_SELF_ATTR_CALL)
+        .filter(m => {
+          const line = m.captures["method_name"]?.startLine;
+          return line && line >= fnLine && line <= fnEndLine;
+        });
+
+      for (const call of plainSelfCalls) {
+        const attrName = call.captures["attr_name"]?.text;
+        const methodName = call.captures["method_name"]?.text;
+        const callLine = call.captures["method_name"]?.startLine;
+        if (!attrName || !methodName || !callLine) continue;
+
+        const className = selfAttrMap.get(attrName);
+        if (!className) continue;
+
+        const child = await resolveClassMethod(
+          resolver, parseFile, queryTree,
+          position.file, callLine, className, methodName,
+          sourceDir, maxDepth - 1, visited,
+        );
+        if (child) rootNode.children.push(child);
+      }
+    }
+
+    // Pattern 4: plain func(args) — non-awaited function calls (e.g., create_access_token)
+    // Stack Graphs filters: only follows calls that resolve to project code
+    const plainFuncCalls = queryTree(tree, PY_PLAIN_FUNC_CALL)
+      .filter(m => {
+        const line = m.captures["call_func"]?.startLine;
+        return line && line >= fnLine && line <= fnEndLine;
+      });
+
+    for (const call of plainFuncCalls) {
+      const funcName = call.captures["call_func"]?.text;
+      const callLine = call.captures["call_func"]?.startLine;
+      if (!funcName || !callLine) continue;
+
+      // Resolve via Stack Graphs — only follow if it resolves to project code
+      const funcDef = resolver.findDefinition(funcName, position.file, 0);
+      if (!funcDef || !funcDef.file.startsWith(sourceDir)) continue;
+
+      // Check if the resolved definition is a function (not a class constructor)
+      // by parsing the target file and checking what's at the definition line
+      let defTree;
+      try { defTree = parseFile(funcDef.file); } catch { continue; }
+      const defFns = queryTree(defTree, `(function_definition name: (identifier) @fn_name)`);
+      const isFunction = defFns.some(
+        m => m.captures["fn_name"]?.text === funcName &&
+             Math.abs((m.captures["fn_name"]?.startLine || 0) - funcDef.line) <= 2
+      );
+      if (!isFunction) continue; // It's a class, not a function — skip
+
+      const key = `${funcDef.file}:${funcDef.line}`;
+      if (visited.has(key)) continue;
+
+      const child = await buildCallTreeDeterministic(
+        resolver,
+        { file: funcDef.file, line: funcDef.line, col: 0 },
+        sourceDir,
+        maxDepth - 1,
+      );
+      if (child) rootNode.children.push(child);
     }
   }
 
