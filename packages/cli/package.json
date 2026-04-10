@@ -1,0 +1,26 @@
+{
+  "name": "@rayuela/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "rayuela": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "smoke": "tsx src/smoke-test.ts"
+  },
+  "dependencies": {
+    "@rayuela/sdk": "workspace:*",
+    "rayuela-core": "file:../../crates/core",
+    "commander": "^13.0.0",
+    "yaml": "^2.7.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "tsx": "^4.19.0",
+    "vitest": "^3.0.0"
+  }
+}
