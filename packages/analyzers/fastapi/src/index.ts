@@ -155,55 +155,69 @@ export const fastapiAnalyzer: Analyzer = {
           metadata: { handler: handlerName, router: routerVar },
         });
 
-        // When LSP is available, build call hierarchy for the handler
-        if (lspClient) {
-          try {
-            const { buildCallTree, flattenCallTree } = await import("@rayuela/lsp");
-            const tree = await buildCallTree(lspClient as any, {
-              file,
-              line: route.startLine,
-              col: route.captures?.["handler_name"]?.startCol ?? 10,
-            }, 3);
-            if (tree) {
-              const calls = flattenCallTree(tree);
-              for (const call of calls) {
-                if (call.name !== tree.name && !call.file.includes("typeshed")) {
-                  edges.push({
-                    type: "calls",
-                    from: nodeId,
-                    to: `${call.name} (${call.file.split("/").pop()}:${call.line})`,
-                    source: { file: call.file, line: call.line },
-                    conditions: [],
-                  });
-                }
-              }
-            }
-          } catch {
-            // LSP call hierarchy not available for this handler
-          }
-        }
-
-        // Build trace for this endpoint
+        // Build traces and call edges
         if (traceStore) {
           try {
             const { TraceKind } = await import("rayuela-core");
-            const guardHashes: string[] = [];
+            let childHashes: string[] = [];
+
+            // Guard traces (always available)
             for (const guard of guards) {
-              const gh = traceStore.insertLeaf(
+              childHashes.push(traceStore.insertLeaf(
                 guard, file, route.startLine,
                 TraceKind.Guard, [`guard:${guard}`],
-              );
-              guardHashes.push(gh);
+              ));
             }
+
+            // When LSP is available, build deep call tree and convert to traces
+            if (lspClient) {
+              try {
+                const { buildCallTree, flattenCallTree } = await import("@rayuela/lsp");
+                const callTree = await buildCallTree(lspClient as any, {
+                  file, line: route.startLine,
+                  col: route.captures?.["handler_name"]?.startCol ?? 10,
+                }, 4);
+                if (callTree) {
+                  // Add call tree nodes as edges AND as trace children
+                  const calls = flattenCallTree(callTree);
+                  for (const call of calls) {
+                    if (call.name === callTree.name) continue;
+                    if (call.file.includes("typeshed") || call.file.includes("builtins")) continue;
+
+                    // Determine kind from file path
+                    const kind = call.file.includes("/services/") ? TraceKind.Service
+                      : call.file.includes("/infra/") || call.file.includes("/repositories/") ? TraceKind.Repository
+                      : call.file.includes("node_modules") ? TraceKind.External
+                      : TraceKind.Function;
+
+                    const callHash = traceStore.insertLeaf(
+                      call.name, call.file, call.line, kind, [],
+                    );
+                    childHashes.push(callHash);
+
+                    // Also add as graph edge
+                    edges.push({
+                      type: "calls", from: nodeId,
+                      to: `${call.name} (${call.file.split("/").pop()}:${call.line})`,
+                      source: { file: call.file, line: call.line },
+                      conditions: [],
+                    });
+                  }
+                }
+              } catch {
+                // LSP call hierarchy not available
+              }
+            }
+
             const endpointHash = traceStore.insert(
               nodeId, file, route.startLine,
               TraceKind.Endpoint,
               guards.map((g: string) => `guard:${g}`),
-              guardHashes,
+              childHashes,
             );
             traceStore.addRoot(endpointHash);
           } catch {
-            // TraceStore not available
+            // Trace building failed
           }
         }
       }
