@@ -12,7 +12,8 @@ import {
   IMPORT_FROM_QUERY,
   IMPORT_FROM_ALIASED_QUERY,
 } from "./queries.js";
-import { classifyGuard } from "./guards.js";
+import { classifyGuard, classifyGuardBySource } from "./guards.js";
+import type { NameResolver } from "rayuela-core";
 
 /** Maps a router variable in a file to its constructor prefix */
 interface ConstructorPrefix {
@@ -168,7 +169,17 @@ export const fastapiAnalyzer: Analyzer = {
         const guardMatches = queryTree(tree, DEPENDS_GUARD_QUERY);
         const guards = guardMatches
           .filter((g) => g.startLine >= route.startLine && g.endLine <= route.endLine)
-          .map((g) => classifyGuard(g.captures["guard_name"]?.text || ""))
+          .map((g) => {
+            const guardName = g.captures["guard_name"]?.text || "";
+            // Use source-based classification when resolver is available
+            if (resolver) {
+              return classifyGuardBySource(
+                guardName, file, g.startLine,
+                resolver as InstanceType<typeof NameResolver>,
+              );
+            }
+            return classifyGuard(guardName);
+          })
           .filter((g): g is string => g !== null);
 
         const nodeId = `${method} ${fullPath || "/"}`;
