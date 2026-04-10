@@ -93,3 +93,50 @@ export class NameResolver {
   findDefinition(symbol: string, file: string, line: number): SymbolLocation | null
   findReferences(symbol: string, file: string): SymbolLocation[]
 }
+
+// Trace identity model
+
+export const enum TraceKind {
+  Endpoint = 'Endpoint',
+  Screen = 'Screen',
+  Guard = 'Guard',
+  Service = 'Service',
+  Repository = 'Repository',
+  External = 'External',
+  Function = 'Function',
+}
+
+export interface Trace {
+  hash: string
+  symbol: string
+  file: string
+  line: number
+  kind: TraceKind
+  parameters: string[]
+  children: string[]
+}
+
+export interface TraceTree {
+  hash: string
+  symbol: string
+  file: string
+  line: number
+  kind: TraceKind
+  parameters: string[]
+  children: TraceTree[]
+}
+
+export class TraceStore {
+  constructor()
+  insertLeaf(symbol: string, file: string, line: number, kind: TraceKind, parameters: string[]): string
+  insert(symbol: string, file: string, line: number, kind: TraceKind, parameters: string[], childrenHashes: string[]): string
+  addRoot(hash: string): void
+  get(hash: string): Trace | null
+  getRoots(): Trace[]
+  findBySymbol(symbol: string): Trace[]
+  findRootsContaining(symbol: string): Trace[]
+  findRootsMissingGuard(guardName: string): Trace[]
+  expand(hash: string): TraceTree | null
+  len(): number
+  rootCount(): number
+}
