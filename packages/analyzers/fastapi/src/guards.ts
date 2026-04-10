@@ -40,12 +40,7 @@ export function classifyGuardBySource(
   line: number,
   resolver: { findDefinition(symbol: string, file: string, line: number): SymbolLocation | null },
 ): string | null {
-  // First check if this is a known non-auth dependency
-  if (NON_AUTH_DEPS.includes(guardName.toLowerCase())) {
-    return null;
-  }
-
-  // Resolve the guard to its definition
+  // Resolve the guard to its definition via Stack Graphs
   const def = resolver.findDefinition(guardName, file, line);
   if (!def) {
     // Can't resolve — fall back to heuristic

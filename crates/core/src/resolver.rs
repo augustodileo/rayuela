@@ -50,11 +50,6 @@ impl NameResolver {
         let mut partials = PartialPaths::new();
         let mut db = Database::new();
 
-        // Merge builtins from language configurations
-        merge_builtins(&mut graph, &python_config);
-        merge_builtins(&mut graph, &ts_config);
-        merge_builtins(&mut graph, &tsx_config);
-
         let files = walkdir(&source_path);
         let mut indexed = 0u32;
         let mut errors = 0u32;

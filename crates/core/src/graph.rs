@@ -43,6 +43,14 @@ impl AppGraph {
 
     #[napi]
     pub fn add_node(&mut self, node: GraphNodeData) {
+        // Validate endpoint IDs match "METHOD /path" format
+        if node.node_type == "endpoint" && !node.id.contains(' ') {
+            eprintln!(
+                "Warning: endpoint node ID '{}' does not match 'METHOD /path' format ({}:{})",
+                node.id, node.file, node.line
+            );
+        }
+
         let id = node.id.clone();
         if !self.node_index.contains_key(&id) {
             let idx = self.graph.add_node(node);
