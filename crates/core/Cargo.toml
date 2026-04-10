@@ -15,11 +15,6 @@ tree-sitter-python = "0.23"
 tree-sitter-typescript = "0.23"
 tree-sitter-javascript = "0.23"
 
-stack-graphs = "0.14"
-tree-sitter-stack-graphs = "0.10"
-tree-sitter-stack-graphs-python = "0.3"
-tree-sitter-stack-graphs-typescript = "0.4"
-
 petgraph = "0.7"
 globset = "0.4"
 serde = { version = "1", features = ["derive"] }

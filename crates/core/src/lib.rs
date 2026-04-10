@@ -2,7 +2,6 @@
 extern crate napi_derive;
 
 pub mod parser;
-pub mod resolver;
 pub mod graph;
 pub mod validator;
 pub mod trace;

@@ -1,4 +1,3 @@
-import type { CallHierarchyItem } from "vscode-languageserver-protocol";
 import { LspClient } from "./client.js";
 import { type SourcePosition, type CallTreeNode, type DefinitionResult, toLspPosition, fromUri } from "./types.js";
 
@@ -171,38 +170,7 @@ async function resolveAndRecurse(
   return child || { name, file: def.file, line: def.line, children: [] };
 }
 
-// --- Legacy callHierarchy approach (for servers that support it) ---
-
-export async function buildCallTree(
-  client: LspClient,
-  position: SourcePosition,
-  maxDepth: number = 5,
-): Promise<CallTreeNode | null> {
-  const lsp = toLspPosition(position);
-  const items = await client.prepareCallHierarchy(position.file, lsp.line, lsp.character);
-  if (!items || items.length === 0) return null;
-  return buildNode(client, items[0], maxDepth, new Set());
-}
-
-async function buildNode(
-  client: LspClient, item: CallHierarchyItem, depth: number, visited: Set<string>,
-): Promise<CallTreeNode> {
-  const key = `${item.uri}:${item.range.start.line}:${item.name}`;
-  const node: CallTreeNode = {
-    name: item.name, detail: item.detail, file: fromUri(item.uri),
-    line: item.range.start.line + 1, children: [],
-  };
-  if (depth <= 0 || visited.has(key)) return node;
-  visited.add(key);
-  try {
-    for (const call of await client.outgoingCalls(item)) {
-      node.children.push(await buildNode(client, call.to, depth - 1, visited));
-    }
-  } catch { /* not supported */ }
-  return node;
-}
-
-// --- Shared ---
+// --- Utilities ---
 
 export async function resolveDefinition(
   client: LspClient, position: SourcePosition,
@@ -211,11 +179,6 @@ export async function resolveDefinition(
   const locs = await client.definition(position.file, lsp.line, lsp.character);
   if (!locs || locs.length === 0) return null;
   return { file: fromUri(locs[0].uri), line: locs[0].range.start.line + 1, col: locs[0].range.start.character };
-}
-
-export function callTreeContains(tree: CallTreeNode, pred: (n: CallTreeNode) => boolean): boolean {
-  if (pred(tree)) return true;
-  return tree.children.some(c => callTreeContains(c, pred));
 }
 
 export function flattenCallTree(tree: CallTreeNode): CallTreeNode[] {

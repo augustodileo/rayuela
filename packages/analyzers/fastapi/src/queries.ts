@@ -1,5 +1,5 @@
-/** Matches @router.METHOD("path") decorated functions in FastAPI.
- *  Uses (string) instead of (string (string_content)) to also match empty string routes "". */
+/** Matches @router.METHOD("path") decorated functions.
+ *  Uses (string) instead of (string (string_content)) to also match empty routes "". */
 export const ROUTE_DECORATOR_QUERY = `
 (decorated_definition
   (decorator
@@ -15,25 +15,7 @@ export const ROUTE_DECORATOR_QUERY = `
     parameters: (parameters) @params))
 `;
 
-/** Matches Depends(guard_function) in parameters (typed and untyped) — fallback when no LSP */
-export const DEPENDS_GUARD_QUERY = `
-[
-  (default_parameter
-    value: (call
-      function: (identifier) @dep_func
-      (#eq? @dep_func "Depends")
-      arguments: (argument_list
-        (identifier) @guard_name)))
-  (typed_default_parameter
-    value: (call
-      function: (identifier) @dep_func
-      (#eq? @dep_func "Depends")
-      arguments: (argument_list
-        (identifier) @guard_name)))
-]
-`;
-
-/** Universal: finds ALL Depends(X) and Security(X) calls anywhere.
+/** Finds ALL Depends(X) and Security(X) calls anywhere.
  *  Handles: Depends(func), Security(func), Depends(func(...)), Security(mod.func) */
 export const ALL_DEPENDS_QUERY = `
 [
@@ -100,19 +82,4 @@ export const APIROUTER_CONSTRUCTOR_QUERY = `
         name: (identifier) @kwarg
         (#eq? @kwarg "prefix")
         value: (string (string_content) @prefix)))))
-`;
-
-/** Matches await calls with attribute access in decorated function bodies.
- *  Finds: await service.method(...) inside route handlers. */
-export const HANDLER_BODY_CALL_QUERY = `
-(decorated_definition
-  definition: (function_definition
-    name: (identifier) @fn_name
-    body: (block
-      (_
-        (await
-          (call
-            function: (attribute
-              attribute: (identifier) @call_method)
-            arguments: (argument_list) @call_args))))))
 `;

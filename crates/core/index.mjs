@@ -9,7 +9,6 @@ export const getLanguageName = native.getLanguageName;
 export const validateSpec = native.validateSpec;
 export const ParseResult = native.ParseResult;
 export const AppGraph = native.AppGraph;
-export const NameResolver = native.NameResolver;
 export const TraceStore = native.TraceStore;
 export const TraceKind = native.TraceKind;
 export const validateTraceSpec = native.validateTraceSpec;

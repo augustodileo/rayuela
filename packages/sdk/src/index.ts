@@ -32,7 +32,6 @@ export interface AnalysisResult {
 }
 
 export interface AnalyzerContext {
-  resolver?: unknown;
   lspClient?: unknown;
   traceStore?: unknown;
 }
