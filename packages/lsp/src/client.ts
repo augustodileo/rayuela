@@ -62,6 +62,7 @@ export class LspClient {
       try {
         const message = JSON.parse(body);
         if ("id" in message && this.pending.has(message.id)) {
+          // Response to our request
           const { resolve, reject } = this.pending.get(message.id)!;
           this.pending.delete(message.id);
           if (message.error) {
@@ -69,8 +70,11 @@ export class LspClient {
           } else {
             resolve(message.result);
           }
+        } else if ("id" in message && "method" in message) {
+          // Server-initiated request — must respond
+          this.handleServerRequest(message);
         }
-        // Ignore notifications and server-initiated requests
+        // Ignore notifications (no id, has method)
       } catch {
         // Malformed JSON — skip
       }
@@ -97,7 +101,7 @@ export class LspClient {
   }
 
   /** Initialize the language server */
-  async initialize(rootPath: string): Promise<InitializeResult> {
+  async initialize(rootPath: string, initOptions?: Record<string, unknown>): Promise<InitializeResult> {
     const params: InitializeParams = {
       processId: process.pid,
       rootUri: toUri(rootPath),
@@ -108,12 +112,40 @@ export class LspClient {
           hover: { dynamicRegistration: false, contentFormat: ["plaintext"] },
         },
       },
+      initializationOptions: initOptions,
     } as InitializeParams;
 
     const result = await this.sendRequest<InitializeResult>("initialize", params);
     this.sendNotification("initialized", {});
     this.initialized = true;
     return result;
+  }
+
+  /** Handle server-initiated requests (e.g., workspace/configuration) */
+  private handleServerRequest(message: { id: number; method: string; params?: unknown }): void {
+    let result: unknown = null;
+
+    if (message.method === "workspace/configuration") {
+      // Pyright requests configuration. Return empty settings for each item.
+      const params = message.params as { items?: unknown[] } | undefined;
+      result = (params?.items || []).map(() => ({}));
+    } else if (message.method === "client/registerCapability") {
+      // Server wants to register dynamic capabilities — accept
+      result = null;
+    } else if (message.method === "window/workDoneProgress/create") {
+      // Progress tracking — accept
+      result = null;
+    }
+
+    // Send response
+    const response = JSON.stringify({ jsonrpc: "2.0", id: message.id, result });
+    const frame = `Content-Length: ${Buffer.byteLength(response)}\r\n\r\n${response}`;
+    this.process.stdin!.write(frame);
+  }
+
+  /** Send workspace configuration notification */
+  sendConfigurationNotification(settings: Record<string, unknown>): void {
+    this.sendNotification("workspace/didChangeConfiguration", { settings });
   }
 
   /** Open a text document so the server can analyze it */

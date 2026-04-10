@@ -73,5 +73,17 @@ export const APIROUTER_CONSTRUCTOR_QUERY = `
         value: (string (string_content) @prefix)))))
 `;
 
-// Import resolution is now handled by Stack Graphs (NameResolver).
-// No handwritten import queries needed.
+/** Matches await calls with attribute access in decorated function bodies.
+ *  Finds: await service.method(...) inside route handlers. */
+export const HANDLER_BODY_CALL_QUERY = `
+(decorated_definition
+  definition: (function_definition
+    name: (identifier) @fn_name
+    body: (block
+      (_
+        (await
+          (call
+            function: (attribute
+              attribute: (identifier) @call_method)
+            arguments: (argument_list) @call_args))))))
+`;

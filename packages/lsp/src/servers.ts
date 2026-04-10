@@ -81,14 +81,36 @@ export async function getClient(
     console.error(`LSP server error: ${err.message}`);
   });
 
+  // Build initialization options (e.g., Pyright venv settings)
+  const initOptions: Record<string, unknown> = {};
+  if (options?.venvPath && language === "python") {
+    // Tell Pyright where the virtualenv is
+    initOptions.python = {
+      pythonPath: `${options.venvPath}/bin/python`,
+      venvPath: resolve(options.venvPath, ".."),
+      venv: ".venv",
+    };
+    initOptions.pythonPath = `${options.venvPath}/bin/python`;
+  }
+
   // Initialize with the source directory as root
   try {
     const initResult = await Promise.race([
-      client.initialize(absDir),
+      client.initialize(absDir, Object.keys(initOptions).length > 0 ? initOptions : undefined),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error("LSP initialize timed out")), 10000)
       ),
     ]);
+    // Send configuration with python path for Pyright
+    if (options?.venvPath && language === "python") {
+      client.sendConfigurationNotification({
+        python: {
+          pythonPath: `${options.venvPath}/bin/python`,
+          venvPath: resolve(options.venvPath, ".."),
+          analysis: { autoSearchPaths: true },
+        },
+      });
+    }
   } catch (e) {
     proc.kill();
     return null;
