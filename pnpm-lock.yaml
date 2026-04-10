@@ -54,6 +54,9 @@ importers:
       '@rayuela/analyzer-fastapi':
         specifier: workspace:*
         version: link:../analyzers/fastapi
+      '@rayuela/lsp':
+        specifier: workspace:*
+        version: link:../lsp
       '@rayuela/sdk':
         specifier: workspace:*
         version: link:../sdk

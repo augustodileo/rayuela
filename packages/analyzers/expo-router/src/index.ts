@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { glob } from "glob";
-import type { Analyzer, AnalysisResult, GraphNode, GraphEdge } from "@rayuela/sdk";
+import type { Analyzer, AnalyzerContext, AnalysisResult, GraphNode, GraphEdge } from "@rayuela/sdk";
 import { discoverScreens } from "./screens.js";
 import { detectApiCalls, detectNavigations, detectAuthGuard } from "./api-calls.js";
 import { parseApiClient, buildApiMapping } from "./api-client-parser.js";
@@ -20,7 +20,7 @@ export const expoRouterAnalyzer: Analyzer = {
     }
   },
 
-  async analyze(sourceDir: string, _resolver?: unknown): Promise<AnalysisResult> {
+  async analyze(sourceDir: string, _context?: AnalyzerContext): Promise<AnalysisResult> {
     const nodes: GraphNode[] = [];
     const edges: GraphEdge[] = [];
 

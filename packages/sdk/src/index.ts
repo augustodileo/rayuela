@@ -31,8 +31,13 @@ export interface AnalysisResult {
   warnings: AnalysisWarning[];
 }
 
+export interface AnalyzerContext {
+  resolver?: unknown;
+  lspClient?: unknown;
+}
+
 export interface Analyzer {
   name: string;
   detect(sourceDir: string): Promise<boolean>;
-  analyze(sourceDir: string, resolver?: unknown): Promise<AnalysisResult>;
+  analyze(sourceDir: string, context?: AnalyzerContext): Promise<AnalysisResult>;
 }

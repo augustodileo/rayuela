@@ -2,7 +2,7 @@ import { parseFile, queryTree } from "rayuela-core";
 import { glob } from "glob";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type { Analyzer, AnalysisResult, GraphNode, GraphEdge, AnalysisWarning } from "@rayuela/sdk";
+import type { Analyzer, AnalyzerContext, AnalysisResult, GraphNode, GraphEdge, AnalysisWarning } from "@rayuela/sdk";
 import {
   ROUTE_DECORATOR_QUERY,
   DEPENDS_GUARD_QUERY,
@@ -46,11 +46,12 @@ export const fastapiAnalyzer: Analyzer = {
     }
   },
 
-  async analyze(sourceDir: string, resolver?: unknown): Promise<AnalysisResult> {
+  async analyze(sourceDir: string, context?: AnalyzerContext): Promise<AnalysisResult> {
     const nodes: GraphNode[] = [];
     const edges: GraphEdge[] = [];
     const warnings: AnalysisWarning[] = [];
-    const typedResolver = resolver as InstanceType<typeof NameResolver> | undefined;
+    const typedResolver = context?.resolver as InstanceType<typeof NameResolver> | undefined;
+    const lspClient = context?.lspClient;
 
     const pyFiles = await glob("**/*.py", { cwd: sourceDir, absolute: true });
 
@@ -149,6 +150,34 @@ export const fastapiAnalyzer: Analyzer = {
           conditions: [],
           metadata: { handler: handlerName, router: routerVar },
         });
+
+        // When LSP is available, build call hierarchy for the handler
+        if (lspClient) {
+          try {
+            const { buildCallTree, flattenCallTree } = await import("@rayuela/lsp");
+            const tree = await buildCallTree(lspClient as any, {
+              file,
+              line: route.startLine,
+              col: route.captures?.["handler_name"]?.startCol ?? 10,
+            }, 3);
+            if (tree) {
+              const calls = flattenCallTree(tree);
+              for (const call of calls) {
+                if (call.name !== tree.name && !call.file.includes("typeshed")) {
+                  edges.push({
+                    type: "calls",
+                    from: nodeId,
+                    to: `${call.name} (${call.file.split("/").pop()}:${call.line})`,
+                    source: { file: call.file, line: call.line },
+                    conditions: [],
+                  });
+                }
+              }
+            }
+          } catch {
+            // LSP call hierarchy not available for this handler
+          }
+        }
       }
     }
 

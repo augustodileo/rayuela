@@ -1,75 +1,87 @@
 import { AppGraph, NameResolver, validateSpec as validateSpecRust } from "rayuela-core";
+import { getClient, detectLanguage, shutdownAll } from "@rayuela/lsp";
 import { detectPlugins } from "./plugins.js";
 import { loadSpec } from "./spec-loader.js";
 import { formatTestResults } from "./formatters/text.js";
 import { linkApiCalls } from "./linker.js";
-import type { GraphNode, GraphEdge } from "@rayuela/sdk";
+import type { GraphNode, GraphEdge, AnalyzerContext } from "@rayuela/sdk";
 
-export async function runTest(sourceDirs: string[], specPath: string): Promise<boolean> {
+export async function runTest(sourceDirs: string[], specPath: string, useLsp = true): Promise<boolean> {
   const allNodes: GraphNode[] = [];
   const allEdges: GraphEdge[] = [];
   const detectedNames = new Set<string>();
 
-  // Collect all nodes and edges from all source dirs
-  for (const sourceDir of sourceDirs) {
-    // Build Stack Graphs resolver for this source directory
-    let resolver: InstanceType<typeof NameResolver> | undefined;
-    try {
-      resolver = NameResolver.build(sourceDir);
-    } catch (e) {
-      console.log(`  WARN  Failed to build name resolver for ${sourceDir}: ${e}`);
+  try {
+    for (const sourceDir of sourceDirs) {
+      const context: AnalyzerContext = {};
+
+      try {
+        context.resolver = NameResolver.build(sourceDir);
+      } catch {
+        // Stack Graphs not available
+      }
+
+      if (useLsp) {
+        const plugins = await detectPlugins(sourceDir);
+        const lang = plugins.some((p) => p.name === "fastapi") ? "python" : "typescript";
+        try {
+          const lsp = await getClient(lang as "python" | "typescript", sourceDir);
+          if (lsp) context.lspClient = lsp;
+        } catch {
+          // LSP not available
+        }
+      }
+
+      const plugins = await detectPlugins(sourceDir);
+      for (const plugin of plugins) {
+        detectedNames.add(plugin.name);
+        const result = await plugin.analyze(sourceDir, context);
+        allNodes.push(...result.nodes);
+        allEdges.push(...result.edges);
+      }
     }
 
-    const plugins = await detectPlugins(sourceDir);
-    for (const plugin of plugins) {
-      detectedNames.add(plugin.name);
-      const result = await plugin.analyze(sourceDir, resolver);
-      allNodes.push(...result.nodes);
-      allEdges.push(...result.edges);
+    if (detectedNames.size === 0) {
+      console.log("  No supported frameworks detected.");
+      return false;
     }
+
+    const linkedEdges = linkApiCalls(allNodes, allEdges);
+
+    const graph = new AppGraph();
+    for (const node of allNodes) {
+      graph.addNode({
+        nodeType: node.type,
+        id: node.id,
+        file: node.source.file,
+        line: node.source.line,
+        guards: node.guards,
+        conditions: node.conditions,
+      });
+    }
+    for (const edge of linkedEdges) {
+      graph.addEdge({
+        edgeType: edge.type,
+        fromId: edge.from,
+        toId: edge.to,
+        file: edge.source.file,
+        line: edge.source.line,
+      });
+    }
+
+    const totalEndpoints = allNodes.filter((n) => n.type === "endpoint").length;
+    const totalScreens = allNodes.filter((n) => n.type === "screen").length;
+    console.log(`  Detected: ${[...detectedNames].join(", ")}`);
+    console.log(`  Discovered: ${totalEndpoints} endpoints, ${totalScreens} screens, ${linkedEdges.length} edges`);
+    console.log("");
+
+    const specTests = await loadSpec(specPath);
+    const results = validateSpecRust(graph, specTests);
+
+    console.log(formatTestResults(results));
+
+    return results.every((r) => r.passed);
+  } finally {
+    await shutdownAll();
   }
-
-  if (detectedNames.size === 0) {
-    console.log("  No supported frameworks detected.");
-    return false;
-  }
-
-  // Link frontend API calls to backend endpoints
-  const linkedEdges = linkApiCalls(allNodes, allEdges);
-
-  // Build graph
-  const graph = new AppGraph();
-  for (const node of allNodes) {
-    graph.addNode({
-      nodeType: node.type,
-      id: node.id,
-      file: node.source.file,
-      line: node.source.line,
-      guards: node.guards,
-      conditions: node.conditions,
-    });
-  }
-  for (const edge of linkedEdges) {
-    graph.addEdge({
-      edgeType: edge.type,
-      fromId: edge.from,
-      toId: edge.to,
-      file: edge.source.file,
-      line: edge.source.line,
-    });
-  }
-
-  const totalEndpoints = allNodes.filter((n) => n.type === "endpoint").length;
-  const totalScreens = allNodes.filter((n) => n.type === "screen").length;
-  console.log(`  Detected: ${[...detectedNames].join(", ")}`);
-  console.log(`  Discovered: ${totalEndpoints} endpoints, ${totalScreens} screens, ${linkedEdges.length} edges`);
-  console.log("");
-
-  // Load spec and validate
-  const specTests = await loadSpec(specPath);
-  const results = validateSpecRust(graph, specTests);
-
-  console.log(formatTestResults(results));
-
-  return results.every((r) => r.passed);
 }

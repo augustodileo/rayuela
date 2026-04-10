@@ -16,11 +16,12 @@ program
   .description("Scan source code and output all discovered paths")
   .argument("<sourceDirs...>", "One or more source directories to scan")
   .option("--format <format>", "Output format: text, json, yaml", "text")
-  .action(async (sourceDirs: string[]) => {
+  .option("--no-lsp", "Disable LSP integration (use tree-sitter + Stack Graphs only)")
+  .action(async (sourceDirs: string[], options: { lsp: boolean }) => {
     const resolved = sourceDirs.map((d) => path.resolve(d));
     console.log(`\n  rayuela v0.1.0\n`);
     console.log(`  Scanning ${resolved.join(", ")} ...\n`);
-    await runDiscover(resolved);
+    await runDiscover(resolved, options.lsp);
   });
 
 program
@@ -29,12 +30,13 @@ program
   .argument("<sourceDirs...>", "One or more source directories to scan")
   .option("--spec <file>", "Path to spec file", "rayuela.test.yml")
   .option("--format <format>", "Output format: text, json, junit", "text")
-  .action(async (sourceDirs: string[], options: { spec: string }) => {
+  .option("--no-lsp", "Disable LSP integration (use tree-sitter + Stack Graphs only)")
+  .action(async (sourceDirs: string[], options: { spec: string; lsp: boolean }) => {
     const resolved = sourceDirs.map((d) => path.resolve(d));
     const specPath = path.resolve(options.spec);
     console.log(`\n  rayuela v0.1.0\n`);
     console.log(`  Scanning ${resolved.join(", ")} ...\n`);
-    const allPassed = await runTest(resolved, specPath);
+    const allPassed = await runTest(resolved, specPath, options.lsp);
     process.exit(allPassed ? 0 : 1);
   });
 
