@@ -50,6 +50,16 @@ describe("FastAPI Analyzer", () => {
     expect(login?.guards).toHaveLength(0);
   });
 
+  it("does not classify get_db as a guard", async () => {
+    const result = await fastapiAnalyzer.analyze(FIXTURE_DIR);
+
+    // create_item has both Depends(get_current_user_id) and Depends(get_db)
+    const createItem = result.nodes.find((n) => n.id === "POST /api/v1/items");
+    expect(createItem?.guards).toContain("authenticated");
+    expect(createItem?.guards).not.toContain("get_db");
+    expect(createItem?.guards).toHaveLength(1); // only "authenticated"
+  });
+
   it("health endpoint has no guards", async () => {
     const result = await fastapiAnalyzer.analyze(FIXTURE_DIR);
 
