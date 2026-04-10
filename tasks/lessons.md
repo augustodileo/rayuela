@@ -1,19 +1,31 @@
 # Lessons Learned
 
-## Tree-sitter Python: typed_default_parameter vs default_parameter
-**Pattern:** `user_id: UUID = Depends(guard)` uses `typed_default_parameter`, not `default_parameter`. Always match both with `[...]` alternation in tree-sitter queries that target default parameter values in Python.
+## Architecture principle: tree-sitter FINDS, LSP FOLLOWS
+Tree-sitter is for syntactic discovery (finding decorators, imports, screens). LSP is for semantic following (what does this function call, what type is this). Don't use tree-sitter for semantic analysis — that's heuristic pattern matching.
 
-## Tree-sitter regex: careful with greedy matching
-**Pattern:** `^use[A-Z].*[Aa]uth` does NOT match "useAuthStore" because after consuming "useA", the remaining "uthStore" has no "Auth" substring. Fix: use `^use.*[Aa]uth` instead.
+## Stack Graphs: ROOT_PATH_VAR is required
+Python TSG rules use `(replace FILE_PATH ROOT_PATH "")` to derive module paths. Without ROOT_PATH set, cross-file resolution silently fails. Always canonicalize paths and set both FILE_PATH and ROOT_PATH.
 
-## napi-rs v2: Option<String> requires undefined, not null
-**Pattern:** When passing TypeScript objects to Rust `#[napi(object)]` structs with `Option<T>` fields, use `undefined` (not `null`). JavaScript `null` triggers `StringExpected` error in napi-rs.
+## napi-rs v2: Option<T> needs undefined, not null
+JavaScript `null` triggers `StringExpected` error in napi-rs for `Option<String>` fields. Use `undefined` in TypeScript.
 
 ## napi-rs: CJS→ESM named exports
-**Pattern:** Node.js CJS named export detection fails for complex loader scripts. Solution: create an `.mjs` ESM wrapper that re-exports via `createRequire`. Use `exports` field in package.json with `import`/`require` conditions.
+Node.js CJS named export detection fails for loader scripts. Solution: `.mjs` ESM wrapper with `createRequire`.
 
-## Rust cdylib: can't use integration tests
-**Pattern:** `cdylib` crate type links against napi symbols that don't exist outside Node.js. Use `crate-type = ["cdylib", "rlib"]` and write tests as `#[cfg(test)]` modules inside the crate, not as integration tests in `tests/`.
+## Tree-sitter Python: typed_default_parameter
+`user_id: UUID = Depends(guard)` uses `typed_default_parameter`, not `default_parameter`. Match both with `[...]` alternation.
 
-## Expo Router: index.tsx screen naming
-**Pattern:** For `(tabs)/index.tsx`, use the relative path (after stripping `/index`) to derive the screen name, not `path.dirname()` which loses the group directory context.
+## Tree-sitter: empty strings have no string_content
+`@router.post("")` parses as `(string)` with no `string_content` child. Use `(string) @route_str` and strip quotes manually.
+
+## Screen naming: include parent directory for dynamic routes
+`[id].tsx` in different directories (roll/, session/) needs parent context to avoid duplicate names. `roll/[id].tsx` → "RollDetailScreen".
+
+## Structural hashing for trace identity
+Hash(symbol, kind, params, children_hashes) — excludes file/line (metadata, not identity). Same structure = same hash. Different guard = different hash.
+
+## Auto-dependency installation
+LSP can only trace through installed packages. Auto-install via uv/pip/npm into ~/.cache/rayuela/ and point LSP at the venv via VIRTUAL_ENV env var.
+
+## Regex gotcha: ^use[A-Z].*[Aa]uth
+Does NOT match "useAuthStore". After consuming "useA", remaining "uthStore" has no "Auth" substring. Use `^use.*[Aa]uth` instead.

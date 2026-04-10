@@ -9,8 +9,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "vitest run",
-    "smoke": "tsx src/smoke-test.ts"
+    "test": "vitest run"
   },
   "dependencies": {
     "@rayuela/sdk": "workspace:*",
