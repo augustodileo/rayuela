@@ -9,7 +9,6 @@ import {
   INCLUDE_ROUTER_WITH_PREFIX_QUERY,
   INCLUDE_ROUTER_NO_PREFIX_QUERY,
   APIROUTER_CONSTRUCTOR_QUERY,
-  HANDLER_BODY_CALL_QUERY,
 } from "./queries.js";
 import { classifyGuard, classifyGuardBySource } from "./guards.js";
 import type { NameResolver } from "rayuela-core";
@@ -107,6 +106,16 @@ export const fastapiAnalyzer: Analyzer = {
       }
     }
 
+    // If LSP is available, open all Python files and let the server analyze them
+    if (lspClient) {
+      const client = lspClient as any;
+      for (const f of pyFiles) {
+        await client.openFile(f, "python");
+      }
+      // Give the LSP server time to analyze opened files
+      await new Promise(r => setTimeout(r, 3000));
+    }
+
     // === Pass 3: Find route decorators and resolve full paths ===
     for (const file of pyFiles) {
       const tree = parseFile(file);
@@ -170,59 +179,42 @@ export const fastapiAnalyzer: Analyzer = {
               ));
             }
 
-            // When LSP is available, trace calls from the handler body
-            if (lspClient) {
+            // When LSP is available, build deep call tree from handler body
+            if (lspClient && handlerName) {
               try {
-                const { buildCallTree, flattenCallTree } = await import("@rayuela/lsp");
-                const client = lspClient as any;
+                const { buildCallTreeViaDefinitions, flattenCallTree } = await import("@rayuela/lsp");
                 const absSourceDir = path.resolve(sourceDir);
 
-                // Tree-sitter finds call sites in handler body
-                const bodyCalls = queryTree(tree, HANDLER_BODY_CALL_QUERY)
-                  .filter((c) => c.captures["fn_name"]?.text === handlerName);
+                // Find the handler function position from tree-sitter
+                const handlerLine = route.captures?.["handler_name"]?.startLine ?? route.startLine;
+                const callTree = await buildCallTreeViaDefinitions(
+                  lspClient as any,
+                  { file, line: handlerLine, col: 10 },
+                  absSourceDir,
+                  3,
+                );
 
-                for (const bodyCall of bodyCalls) {
-                  const callLine = bodyCall.captures["call_method"]?.startLine;
-                  const callCol = bodyCall.captures["call_method"]?.startCol;
-                  const callName = bodyCall.captures["call_method"]?.text;
-                  if (!callLine || callCol === undefined || !callName) continue;
+                if (callTree) {
+                  const calls = flattenCallTree(callTree);
+                  for (const call of calls) {
+                    if (call.name === callTree.name) continue;
+                    if (!call.file.startsWith(absSourceDir)) continue;
 
-                  // LSP resolves the call to its definition
-                  const defs = await client.definition(file, callLine - 1, callCol);
-                  if (!defs || defs.length === 0) continue;
+                    const kind = call.file.includes("/services/") ? TraceKind.Service
+                      : call.file.includes("/infra/") || call.file.includes("/repositories/") ? TraceKind.Repository
+                      : TraceKind.Function;
 
-                  const defFile = defs[0].uri.replace("file://", "");
-                  const defLine = defs[0].range.start.line;
+                    const callHash = traceStore.insertLeaf(
+                      call.name, call.file, call.line, kind, [],
+                    );
+                    childHashes.push(callHash);
 
-                  // Only trace into user project code
-                  if (!defFile.startsWith(absSourceDir)) continue;
-
-                  // Build call tree from the resolved definition
-                  const callTree = await buildCallTree(client, {
-                    file: defFile, line: defLine + 1, col: 10,
-                  }, 3);
-
-                  if (callTree) {
-                    const calls = flattenCallTree(callTree);
-                    for (const call of calls) {
-                      if (!call.file.startsWith(absSourceDir)) continue;
-
-                      const kind = call.file.includes("/services/") ? TraceKind.Service
-                        : call.file.includes("/infra/") || call.file.includes("/repositories/") ? TraceKind.Repository
-                        : TraceKind.Function;
-
-                      const callHash = traceStore.insertLeaf(
-                        call.name, call.file, call.line, kind, [],
-                      );
-                      childHashes.push(callHash);
-
-                      edges.push({
-                        type: "calls", from: nodeId,
-                        to: `${call.name} (${call.file.split("/").pop()}:${call.line})`,
-                        source: { file: call.file, line: call.line },
-                        conditions: [],
-                      });
-                    }
+                    edges.push({
+                      type: "calls", from: nodeId,
+                      to: `${call.name} (${call.file.split("/").pop()}:${call.line})`,
+                      source: { file: call.file, line: call.line },
+                      conditions: [],
+                    });
                   }
                 }
               } catch {

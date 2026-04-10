@@ -29,6 +29,9 @@ importers:
 
   packages/analyzers/fastapi:
     dependencies:
+      '@rayuela/lsp':
+        specifier: workspace:*
+        version: link:../../lsp
       '@rayuela/sdk':
         specifier: workspace:*
         version: link:../../sdk
@@ -82,6 +85,9 @@ importers:
 
   packages/lsp:
     dependencies:
+      rayuela-core:
+        specifier: file:../../crates/core
+        version: file:crates/core
       vscode-languageserver-protocol:
         specifier: ^3.17.0
         version: 3.17.5
