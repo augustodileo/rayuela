@@ -20,8 +20,6 @@ export async function runTest(sourceDirs: string[], specPath: string, useLsp = t
       const plugins = await detectPlugins(sourceDir);
       if (plugins.length === 0) continue;
 
-      try { context.resolver = NameResolver.build(sourceDir); } catch {}
-
       if (useLsp) {
         try {
           const deps = await ensureDependencies(sourceDir);
@@ -32,6 +30,11 @@ export async function runTest(sourceDirs: string[], specPath: string, useLsp = t
           });
           if (lsp) context.lspClient = lsp;
         } catch {}
+      }
+
+      if (!context.lspClient) {
+        try { context.resolver = NameResolver.build(sourceDir); } catch {}
+      }
       }
 
       for (const plugin of plugins) {

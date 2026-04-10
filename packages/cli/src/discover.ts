@@ -20,12 +20,7 @@ export async function runDiscover(sourceDirs: string[], useLsp = true): Promise<
       const plugins = await detectPlugins(sourceDir);
       if (plugins.length === 0) continue;
 
-      // Stack Graphs resolver (for import resolution)
-      try {
-        context.resolver = NameResolver.build(sourceDir);
-      } catch { /* not available */ }
-
-      // LSP: install deps + spawn language server
+      // LSP: install deps + spawn language server (preferred)
       if (useLsp) {
         try {
           const deps = await ensureDependencies(sourceDir);
@@ -36,6 +31,13 @@ export async function runDiscover(sourceDirs: string[], useLsp = true): Promise<
           });
           if (lsp) context.lspClient = lsp;
         } catch { /* LSP not available */ }
+      }
+
+      // Stack Graphs fallback: only when no LSP (saves 20+ seconds on large projects)
+      if (!context.lspClient) {
+        try {
+          context.resolver = NameResolver.build(sourceDir);
+        } catch { /* not available */ }
       }
 
       // Run analyzers
