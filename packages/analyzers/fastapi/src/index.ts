@@ -179,45 +179,55 @@ export const fastapiAnalyzer: Analyzer = {
               ));
             }
 
-            // Build deep call tree using Stack Graphs + tree-sitter (deterministic)
-            if (typedResolver) {
-              try {
-                const { buildCallTreeDeterministic, flattenCallTree } = await import("@rayuela/lsp");
-                const absSourceDir = path.resolve(sourceDir);
-                const handlerLine = route.captures?.["handler_name"]?.startLine ?? route.startLine;
+            // Build deep call tree: LSP (Pyright) first, Stack Graphs fallback
+            const absSourceDir = path.resolve(sourceDir);
+            const handlerLine = route.captures?.["handler_name"]?.startLine ?? route.startLine;
+            let callTree: Awaited<ReturnType<typeof import("@rayuela/lsp").buildCallTreeViaDefinitions>> = null;
 
-                const callTree = await buildCallTreeDeterministic(
+            if (lspClient) {
+              // Pyright: resolves ALL patterns (inline constructors, module calls, etc.)
+              try {
+                const { buildCallTreeViaDefinitions } = await import("@rayuela/lsp");
+                callTree = await buildCallTreeViaDefinitions(
+                  lspClient as any,
+                  { file, line: handlerLine, col: 10 },
+                  absSourceDir, 3,
+                );
+              } catch { /* LSP not available */ }
+            }
+
+            if (!callTree && typedResolver) {
+              // Fallback: Stack Graphs + tree-sitter (handles common Python patterns)
+              try {
+                const { buildCallTreeDeterministic } = await import("@rayuela/lsp");
+                callTree = await buildCallTreeDeterministic(
                   typedResolver,
                   { file, line: handlerLine, col: 10 },
-                  absSourceDir,
-                  3,
+                  absSourceDir, 3,
                 );
+              } catch { /* Stack Graphs not available */ }
+            }
 
-                if (callTree) {
-                  const calls = flattenCallTree(callTree);
-                  for (const call of calls) {
-                    if (call.name === callTree.name) continue;
-                    if (!call.file.startsWith(absSourceDir)) continue;
+            if (callTree) {
+              const { flattenCallTree } = await import("@rayuela/lsp");
+              const calls = flattenCallTree(callTree);
+              for (const call of calls) {
+                if (call.name === callTree.name) continue;
+                if (!call.file.startsWith(absSourceDir)) continue;
 
-                    const kind = call.file.includes("/services/") ? TraceKind.Service
-                      : call.file.includes("/infra/") || call.file.includes("/repositories/") ? TraceKind.Repository
-                      : TraceKind.Function;
+                const kind = call.file.includes("/services/") ? TraceKind.Service
+                  : call.file.includes("/infra/") || call.file.includes("/repositories/") ? TraceKind.Repository
+                  : TraceKind.Function;
 
-                    const callHash = traceStore.insertLeaf(
-                      call.name, call.file, call.line, kind, [],
-                    );
-                    childHashes.push(callHash);
-
-                    edges.push({
-                      type: "calls", from: nodeId,
-                      to: `${call.name} (${call.file.split("/").pop()}:${call.line})`,
-                      source: { file: call.file, line: call.line },
-                      conditions: [],
-                    });
-                  }
-                }
-              } catch {
-                // Deterministic tracing not available
+                childHashes.push(traceStore.insertLeaf(
+                  call.name, call.file, call.line, kind, [],
+                ));
+                edges.push({
+                  type: "calls", from: nodeId,
+                  to: `${call.name} (${call.file.split("/").pop()}:${call.line})`,
+                  source: { file: call.file, line: call.line },
+                  conditions: [],
+                });
               }
             }
 

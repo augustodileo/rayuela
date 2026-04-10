@@ -1,30 +1,18 @@
-import { spawn, execSync, type ChildProcess } from "node:child_process";
+import { spawn, execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { LspClient } from "./client.js";
 
 type Language = "python" | "typescript" | "tsx";
 
-const SERVER_COMMANDS: Record<Language, { cmd: string; args: string[] }> = {
-  python: { cmd: "jedi-language-server", args: [] },  // Jedi: better project module resolution
+/** Server commands per language */
+const SERVERS: Record<Language, { cmd: string; args: string[] }> = {
+  python: { cmd: "pyright-langserver", args: ["--stdio"] },
   typescript: { cmd: "typescript-language-server", args: ["--stdio"] },
   tsx: { cmd: "typescript-language-server", args: ["--stdio"] },
 };
 
-/** Cache of running language server clients, keyed by "language:sourceDir" */
 const clientCache = new Map<string, LspClient>();
-
-/**
- * Check if a language server command is available in PATH.
- */
-function isCommandAvailable(cmd: string): boolean {
-  try {
-    execSync(`which ${cmd}`, { stdio: "ignore", env: process.env });
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 export interface LspClientOptions {
   venvPath?: string;
@@ -32,8 +20,10 @@ export interface LspClientOptions {
 }
 
 /**
- * Get or create an LSP client for a given language and source directory.
- * Returns null if the language server is not available.
+ * Get or create an LSP client for a language and source directory.
+ *
+ * Python: uses Pyright with PYTHONPATH=sourceDir and VIRTUAL_ENV=venvPath.
+ * TypeScript: uses typescript-language-server.
  */
 export async function getClient(
   language: Language,
@@ -43,95 +33,43 @@ export async function getClient(
   const absDir = resolve(sourceDir);
   const key = `${language}:${absDir}`;
 
-  // Return cached client if available
-  if (clientCache.has(key)) {
-    return clientCache.get(key)!;
-  }
+  if (clientCache.has(key)) return clientCache.get(key)!;
 
-  const serverConfig = SERVER_COMMANDS[language];
-  if (!serverConfig) return null;
+  const server = SERVERS[language];
+  if (!server || !isAvailable(server.cmd)) return null;
 
-  // Build environment with venv paths
-  const env = { ...process.env };
-  let cmd = serverConfig.cmd;
+  // Build environment
+  const env: Record<string, string> = { ...process.env } as Record<string, string>;
 
-  if (options?.venvPath && language === "python") {
-    env.VIRTUAL_ENV = options.venvPath;
-    env.PATH = `${options.venvPath}/bin:${env.PATH}`;
-    // Try venv's jedi-language-server first, then global pyright
-    const venvCmd = `${options.venvPath}/bin/${serverConfig.cmd}`;
-    if (isCommandAvailable(venvCmd)) {
-      cmd = venvCmd;
-    } else if (!isCommandAvailable(serverConfig.cmd)) {
-      // Try pyright as fallback
-      if (isCommandAvailable("pyright-langserver")) {
-        cmd = "pyright-langserver";
-        serverConfig.args = ["--stdio"];
-      } else {
-        return null;
-      }
+  if (language === "python") {
+    // PYTHONPATH lets Pyright resolve project-internal imports (from app.X import Y)
+    env.PYTHONPATH = absDir;
+    if (options?.venvPath) {
+      // VIRTUAL_ENV lets Pyright find installed packages (fastapi, jwt, etc.)
+      env.VIRTUAL_ENV = options.venvPath;
+      env.PATH = `${options.venvPath}/bin:${env.PATH}`;
     }
-  } else if (!isCommandAvailable(serverConfig.cmd)) {
-    return null;
   }
+
   if (options?.nodeModulesPath && (language === "typescript" || language === "tsx")) {
     env.NODE_PATH = options.nodeModulesPath;
   }
 
-  // Spawn the language server process
-  const proc = spawn(cmd, serverConfig.args, {
+  const proc = spawn(server.cmd, server.args, {
     stdio: ["pipe", "pipe", "pipe"],
     cwd: absDir,
     env,
   });
 
   const client = new LspClient(proc);
+  proc.on("error", () => {}); // Suppress spawn errors
 
-  // Handle process errors
-  proc.on("error", (err) => {
-    console.error(`LSP server error: ${err.message}`);
-  });
-
-  // Build initialization options (e.g., Pyright venv settings)
-  const initOptions: Record<string, unknown> = {};
-  if (options?.venvPath && language === "python") {
-    initOptions.python = {
-      pythonPath: `${options.venvPath}/bin/python`,
-      analysis: {
-        extraPaths: [absDir],
-        autoSearchPaths: true,
-      },
-    };
-    initOptions.settings = {
-      python: {
-        pythonPath: `${options.venvPath}/bin/python`,
-        analysis: {
-          extraPaths: [absDir],
-          autoSearchPaths: true,
-        },
-      },
-    };
-  }
-
-  // Initialize with the source directory as root
   try {
-    const initResult = await Promise.race([
-      client.initialize(absDir, Object.keys(initOptions).length > 0 ? initOptions : undefined),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("LSP initialize timed out")), 10000)
-      ),
+    await Promise.race([
+      client.initialize(absDir),
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error("timeout")), 10000)),
     ]);
-    // Send configuration with python path for Pyright
-    if (options?.venvPath && language === "python") {
-      client.sendConfigurationNotification({
-        python: {
-          pythonPath: `${options.venvPath}/bin/python`,
-          venvPath: resolve(options.venvPath, ".."),
-          analysis: { autoSearchPaths: true },
-        },
-      });
-    }
-  } catch (e) {
+  } catch {
     proc.kill();
     return null;
   }
@@ -140,9 +78,6 @@ export async function getClient(
   return client;
 }
 
-/**
- * Detect the language for a file.
- */
 export function detectLanguage(filePath: string): Language | null {
   if (filePath.endsWith(".py")) return "python";
   if (filePath.endsWith(".ts")) return "typescript";
@@ -150,11 +85,11 @@ export function detectLanguage(filePath: string): Language | null {
   return null;
 }
 
-/**
- * Shutdown all cached language servers. Call this before process exit.
- */
 export async function shutdownAll(): Promise<void> {
-  const shutdowns = Array.from(clientCache.values()).map((c) => c.shutdown());
-  await Promise.allSettled(shutdowns);
+  await Promise.allSettled(Array.from(clientCache.values()).map(c => c.shutdown()));
   clientCache.clear();
+}
+
+function isAvailable(cmd: string): boolean {
+  try { execSync(`which ${cmd}`, { stdio: "ignore" }); return true; } catch { return false; }
 }
