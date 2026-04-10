@@ -12,4 +12,5 @@ export const AppGraph = native.AppGraph;
 export const NameResolver = native.NameResolver;
 export const TraceStore = native.TraceStore;
 export const TraceKind = native.TraceKind;
+export const validateTraceSpec = native.validateTraceSpec;
 export default native;

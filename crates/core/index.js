@@ -34,3 +34,4 @@ exports.AppGraph = nativeBinding.AppGraph
 exports.NameResolver = nativeBinding.NameResolver
 exports.TraceStore = nativeBinding.TraceStore
 exports.TraceKind = nativeBinding.TraceKind
+exports.validateTraceSpec = nativeBinding.validateTraceSpec

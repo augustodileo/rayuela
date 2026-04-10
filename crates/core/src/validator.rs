@@ -1,5 +1,6 @@
 use napi_derive::napi;
 use crate::graph::AppGraph;
+use crate::trace::TraceStore;
 
 /// A single test from the spec file (parsed by TypeScript, passed to Rust).
 #[napi(object)]
@@ -218,6 +219,131 @@ fn validate_match_test(graph: &AppGraph, test: &SpecTest) -> TestResult {
     }
 }
 
+// === Trace-based validation ===
+
+/// A spec test that queries the TraceStore.
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct TraceSpecTest {
+    pub name: String,
+    /// Root trace symbol to check (e.g., "POST /api/v1/items")
+    pub root_symbol: Option<String>,
+    /// Check ALL roots of this kind (e.g., "Endpoint")
+    pub match_kind: Option<String>,
+    /// Glob pattern on root symbol name
+    pub match_pattern: Option<String>,
+    /// Subtree must contain a node with this symbol
+    pub expect_contains: Option<String>,
+    /// Subtree must NOT contain a node with this symbol
+    pub expect_not_contains: Option<String>,
+    /// Root must have this guard parameter
+    pub expect_guard: Option<String>,
+}
+
+/// Validate trace-based spec tests against the TraceStore.
+#[napi]
+pub fn validate_trace_spec(store: &TraceStore, tests: Vec<TraceSpecTest>) -> Vec<TestResult> {
+    tests.iter().map(|test| validate_trace_test(store, test)).collect()
+}
+
+fn validate_trace_test(store: &TraceStore, test: &TraceSpecTest) -> TestResult {
+    let mut failures = Vec::new();
+
+    // Determine which roots to check
+    let roots = if let Some(root_sym) = &test.root_symbol {
+        store.find_by_symbol(root_sym.clone())
+    } else {
+        store.get_roots()
+    };
+
+    if roots.is_empty() && test.root_symbol.is_some() {
+        failures.push(TestFailure {
+            node_id: test.root_symbol.clone().unwrap_or_default(),
+            reason: "Root trace not found in store".to_string(),
+            file: String::new(),
+            line: 0,
+        });
+        return TestResult {
+            name: test.name.clone(),
+            passed: false,
+            message: None,
+            failures,
+        };
+    }
+
+    // Filter by pattern if specified
+    let roots: Vec<_> = if let Some(pattern) = &test.match_pattern {
+        let matcher = globset::GlobBuilder::new(pattern)
+            .literal_separator(false)
+            .build()
+            .ok()
+            .map(|g| g.compile_matcher());
+        roots.into_iter().filter(|r| {
+            let path = r.symbol.split_once(' ').map(|(_, p)| p).unwrap_or(&r.symbol);
+            match &matcher {
+                Some(m) => m.is_match(&r.symbol) || m.is_match(path),
+                None => r.symbol.contains(pattern.as_str()),
+            }
+        }).collect()
+    } else {
+        roots
+    };
+
+    // Check expect_contains
+    if let Some(expected_sym) = &test.expect_contains {
+        for root in &roots {
+            let containing = store.find_roots_containing(expected_sym.clone());
+            let root_found = containing.iter().any(|c| c.hash == root.hash);
+            if !root_found {
+                failures.push(TestFailure {
+                    node_id: root.symbol.clone(),
+                    reason: format!("Trace does not contain '{expected_sym}'"),
+                    file: root.file.clone(),
+                    line: root.line,
+                });
+            }
+        }
+    }
+
+    // Check expect_not_contains
+    if let Some(excluded_sym) = &test.expect_not_contains {
+        let containing = store.find_roots_containing(excluded_sym.clone());
+        for root in &roots {
+            let root_found = containing.iter().any(|c| c.hash == root.hash);
+            if root_found {
+                failures.push(TestFailure {
+                    node_id: root.symbol.clone(),
+                    reason: format!("Trace should not contain '{excluded_sym}'"),
+                    file: root.file.clone(),
+                    line: root.line,
+                });
+            }
+        }
+    }
+
+    // Check expect_guard
+    if let Some(guard) = &test.expect_guard {
+        let missing = store.find_roots_missing_guard(guard.clone());
+        for root in &roots {
+            if missing.iter().any(|m| m.hash == root.hash) {
+                failures.push(TestFailure {
+                    node_id: root.symbol.clone(),
+                    reason: format!("Trace missing guard '{guard}'"),
+                    file: root.file.clone(),
+                    line: root.line,
+                });
+            }
+        }
+    }
+
+    TestResult {
+        name: test.name.clone(),
+        passed: failures.is_empty(),
+        message: None,
+        failures,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -398,5 +524,78 @@ mod tests {
 
         assert!(!results[0].passed);
         assert!(results[0].failures[0].reason.contains("not found"));
+    }
+
+    // === Trace validation tests ===
+
+    use crate::trace::{TraceStore, TraceKind};
+
+    fn build_test_trace_store() -> TraceStore {
+        let mut store = TraceStore::new();
+        let jwt = store.insert_leaf("jwt.decode".into(), "auth.py".into(), 13, TraceKind::External, vec![]);
+        let guard = store.insert(
+            "authenticated".into(), "auth.py".into(), 9,
+            TraceKind::Guard, vec!["guard:authenticated".into()],
+            vec![jwt],
+        ).unwrap();
+
+        let ep1 = store.insert(
+            "POST /api/items".into(), "items.py".into(), 10,
+            TraceKind::Endpoint, vec!["guard:authenticated".into()],
+            vec![guard.clone()],
+        ).unwrap();
+        let ep2 = store.insert(
+            "GET /health".into(), "main.py".into(), 5,
+            TraceKind::Endpoint, vec![],
+            vec![],
+        ).unwrap();
+        store.add_root(ep1).unwrap();
+        store.add_root(ep2).unwrap();
+        store
+    }
+
+    #[test]
+    fn test_trace_contains_passes() {
+        let store = build_test_trace_store();
+        let results = validate_trace_spec(&store, vec![TraceSpecTest {
+            name: "Items endpoint uses JWT".into(),
+            root_symbol: Some("POST /api/items".into()),
+            match_kind: None, match_pattern: None,
+            expect_contains: Some("jwt.decode".into()),
+            expect_not_contains: None,
+            expect_guard: None,
+        }]);
+        assert!(results[0].passed);
+    }
+
+    #[test]
+    fn test_trace_contains_fails() {
+        let store = build_test_trace_store();
+        let results = validate_trace_spec(&store, vec![TraceSpecTest {
+            name: "Health uses JWT (should fail)".into(),
+            root_symbol: Some("GET /health".into()),
+            match_kind: None, match_pattern: None,
+            expect_contains: Some("jwt.decode".into()),
+            expect_not_contains: None,
+            expect_guard: None,
+        }]);
+        assert!(!results[0].passed);
+    }
+
+    #[test]
+    fn test_trace_missing_guard() {
+        let store = build_test_trace_store();
+        let results = validate_trace_spec(&store, vec![TraceSpecTest {
+            name: "All endpoints have auth guard".into(),
+            root_symbol: None,
+            match_kind: None, match_pattern: None,
+            expect_contains: None,
+            expect_not_contains: None,
+            expect_guard: Some("authenticated".into()),
+        }]);
+        // Should fail because GET /health has no guard
+        assert!(!results[0].passed);
+        assert_eq!(results[0].failures.len(), 1);
+        assert_eq!(results[0].failures[0].node_id, "GET /health");
     }
 }
