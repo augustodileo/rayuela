@@ -67,3 +67,39 @@ describe("FastAPI Analyzer", () => {
     expect(health?.guards).toHaveLength(0);
   });
 });
+
+const NESTED_FIXTURE_DIR = path.resolve(
+  import.meta.dirname,
+  "../../../../../fixtures/fastapi-nested"
+);
+
+describe("FastAPI Analyzer — Nested Routers", () => {
+  it("resolves nested constructor prefixes", async () => {
+    const result = await fastapiAnalyzer.analyze(NESTED_FIXTURE_DIR);
+    const endpointIds = result.nodes.map((n) => n.id).sort();
+
+    // api_router has prefix="/api/v1", auth_router has prefix="/auth"
+    // Combined: /api/v1/auth/signup
+    expect(endpointIds).toContain("POST /api/v1/auth/signup");
+    expect(endpointIds).toContain("POST /api/v1/auth/login");
+    expect(endpointIds).toContain("POST /api/v1/items");
+    expect(endpointIds).toContain("GET /api/v1/items");
+    expect(endpointIds).toContain("GET /api/v1/items/{item_id}");
+    expect(endpointIds).toContain("GET /health");
+  });
+
+  it("filters get_db from guards in nested fixture", async () => {
+    const result = await fastapiAnalyzer.analyze(NESTED_FIXTURE_DIR);
+
+    const createItem = result.nodes.find((n) => n.id === "POST /api/v1/items");
+    expect(createItem?.guards).toContain("authenticated");
+    expect(createItem?.guards).not.toContain("get_db");
+  });
+
+  it("auth endpoints in nested fixture have no guards", async () => {
+    const result = await fastapiAnalyzer.analyze(NESTED_FIXTURE_DIR);
+
+    const signup = result.nodes.find((n) => n.id === "POST /api/v1/auth/signup");
+    expect(signup?.guards).toHaveLength(0);
+  });
+});

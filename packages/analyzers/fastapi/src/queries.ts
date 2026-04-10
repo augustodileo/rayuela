@@ -32,8 +32,8 @@ export const DEPENDS_GUARD_QUERY = `
 ]
 `;
 
-/** Matches include_router calls for prefix extraction */
-export const INCLUDE_ROUTER_QUERY = `
+/** Matches include_router(router_var, prefix="/...") with explicit prefix */
+export const INCLUDE_ROUTER_WITH_PREFIX_QUERY = `
 (call
   function: (attribute
     object: (identifier) @app_var
@@ -45,4 +45,45 @@ export const INCLUDE_ROUTER_QUERY = `
       name: (identifier) @kwarg
       (#eq? @kwarg "prefix")
       value: (string (string_content) @prefix))))
+`;
+
+/** Matches include_router(router_var) without explicit prefix */
+export const INCLUDE_ROUTER_NO_PREFIX_QUERY = `
+(call
+  function: (attribute
+    object: (identifier) @app_var
+    attribute: (identifier) @method
+    (#eq? @method "include_router"))
+  arguments: (argument_list
+    (identifier) @router_var))
+`;
+
+/** Matches APIRouter(prefix="/...") constructor calls */
+export const APIROUTER_CONSTRUCTOR_QUERY = `
+(assignment
+  left: (identifier) @var_name
+  right: (call
+    function: (identifier) @class_name
+    (#eq? @class_name "APIRouter")
+    arguments: (argument_list
+      (keyword_argument
+        name: (identifier) @kwarg
+        (#eq? @kwarg "prefix")
+        value: (string (string_content) @prefix)))))
+`;
+
+/** Matches from X import Y and from X import Y as Z */
+export const IMPORT_FROM_QUERY = `
+(import_from_statement
+  module_name: (dotted_name) @module
+  name: (dotted_name) @import_name)
+`;
+
+/** Matches aliased imports: from X import Y as Z */
+export const IMPORT_FROM_ALIASED_QUERY = `
+(import_from_statement
+  module_name: (dotted_name) @module
+  name: (aliased_import
+    name: (dotted_name) @original_name
+    alias: (identifier) @alias))
 `;
