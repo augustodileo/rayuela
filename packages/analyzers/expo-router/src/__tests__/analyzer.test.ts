@@ -67,16 +67,24 @@ describe("Expo Router Analyzer", () => {
     expect(auth?.guards).toContain("authenticated"); // AuthScreen also uses useAuthStore for login
   });
 
-  it("detects API calls from screens", async () => {
+  it("resolves API calls to actual endpoint IDs via client parsing", async () => {
     const result = await expoRouterAnalyzer.analyze(FIXTURE_DIR);
 
     const apiCalls = result.edges.filter((e) => e.type === "calls");
-    const apiCallTargets = apiCalls.map((e) => `${e.from} -> ${e.to}`);
+    const targets = apiCalls.map((e) => e.to);
 
-    // ItemListScreen (TabsScreen since it's the index of (tabs)) calls api.items.list
-    expect(apiCallTargets).toContainEqual(
-      expect.stringContaining("api.items.list")
-    );
+    // api.items.list is resolved to GET /api/v1/items by parsing lib/api.ts
+    expect(targets).toContain("GET /api/v1/items");
+  });
+
+  it("resolves API calls with template URLs to parameterized endpoints", async () => {
+    const result = await expoRouterAnalyzer.analyze(FIXTURE_DIR);
+
+    const apiCalls = result.edges.filter((e) => e.type === "calls");
+    const targets = apiCalls.map((e) => e.to);
+
+    // api.items.get is resolved to GET /api/v1/items/{id} by parsing lib/api.ts
+    expect(targets).toContain("GET /api/v1/items/{id}");
   });
 
   it("detects navigation edges", async () => {

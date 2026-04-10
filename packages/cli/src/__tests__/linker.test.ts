@@ -4,10 +4,7 @@ import type { GraphNode, GraphEdge } from "@rayuela/sdk";
 
 const endpoints: GraphNode[] = [
   { type: "endpoint", id: "GET /api/v1/items", source: { file: "items.py", line: 1 }, guards: [], conditions: [], metadata: {} },
-  { type: "endpoint", id: "GET /api/v1/items/{item_id}", source: { file: "items.py", line: 5 }, guards: [], conditions: [], metadata: {} },
-  { type: "endpoint", id: "POST /api/v1/items", source: { file: "items.py", line: 10 }, guards: [], conditions: [], metadata: {} },
   { type: "endpoint", id: "POST /api/v1/auth/signup", source: { file: "auth.py", line: 1 }, guards: [], conditions: [], metadata: {} },
-  { type: "endpoint", id: "POST /api/v1/auth/login", source: { file: "auth.py", line: 5 }, guards: [], conditions: [], metadata: {} },
 ];
 
 const screens: GraphNode[] = [
@@ -16,8 +13,8 @@ const screens: GraphNode[] = [
 
 const allNodes = [...endpoints, ...screens];
 
-describe("linkApiCalls", () => {
-  it("links api.items.list to GET /api/v1/items (collection)", () => {
+describe("linkApiCalls (fallback)", () => {
+  it("resolves unresolved api.X.Y to matching endpoint by module name", () => {
     const edges: GraphEdge[] = [
       { type: "calls", from: "HomeScreen", to: "api.items.list", source: { file: "home.tsx", line: 5 }, conditions: [] },
     ];
@@ -25,28 +22,12 @@ describe("linkApiCalls", () => {
     expect(result[0].to).toBe("GET /api/v1/items");
   });
 
-  it("links api.items.get to GET /api/v1/items/{item_id} (parameterized)", () => {
+  it("leaves already-resolved edges unchanged", () => {
     const edges: GraphEdge[] = [
-      { type: "calls", from: "HomeScreen", to: "api.items.get", source: { file: "home.tsx", line: 6 }, conditions: [] },
+      { type: "calls", from: "HomeScreen", to: "GET /api/v1/items", source: { file: "home.tsx", line: 5 }, conditions: [] },
     ];
     const result = linkApiCalls(allNodes, edges);
-    expect(result[0].to).toBe("GET /api/v1/items/{item_id}");
-  });
-
-  it("links api.items.create to POST /api/v1/items", () => {
-    const edges: GraphEdge[] = [
-      { type: "calls", from: "HomeScreen", to: "api.items.create", source: { file: "home.tsx", line: 7 }, conditions: [] },
-    ];
-    const result = linkApiCalls(allNodes, edges);
-    expect(result[0].to).toBe("POST /api/v1/items");
-  });
-
-  it("links api.auth.login to POST /api/v1/auth/login", () => {
-    const edges: GraphEdge[] = [
-      { type: "calls", from: "HomeScreen", to: "api.auth.login", source: { file: "home.tsx", line: 8 }, conditions: [] },
-    ];
-    const result = linkApiCalls(allNodes, edges);
-    expect(result[0].to).toBe("POST /api/v1/auth/login");
+    expect(result[0].to).toBe("GET /api/v1/items");
   });
 
   it("leaves non-api edges unchanged", () => {
