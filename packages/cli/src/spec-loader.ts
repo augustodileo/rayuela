@@ -49,15 +49,15 @@ export async function loadSpec(specPath: string): Promise<SpecTest[]> {
       return {
         name: t.name,
         testType: "path",
-        fromId: resolveId(t.path?.from) ?? null,
-        throughIds: t.path?.through?.map((r) => resolveId(r)!).filter(Boolean) ?? null,
-        toId: resolveId(t.path?.to) ?? null,
-        matchType: null,
-        matchPattern: null,
-        excludePattern: null,
-        expectReachable: t.expect.reachable ?? null,
-        expectGuards: t.expect.guards ?? null,
-        expectMinCallers: null,
+        fromId: resolveId(t.path?.from) ?? undefined,
+        throughIds: t.path?.through?.map((r) => resolveId(r)!).filter(Boolean) ?? undefined,
+        toId: resolveId(t.path?.to) ?? undefined,
+        matchType: undefined,
+        matchPattern: undefined,
+        excludePattern: undefined,
+        expectReachable: t.expect.reachable ?? undefined,
+        expectGuards: t.expect.guards ?? undefined,
+        expectMinCallers: undefined,
       };
     }
 
@@ -68,15 +68,15 @@ export async function loadSpec(specPath: string): Promise<SpecTest[]> {
       return {
         name: t.name,
         testType: "match",
-        fromId: null,
-        throughIds: null,
-        toId: null,
+        fromId: undefined,
+        throughIds: undefined,
+        toId: undefined,
         matchType,
         matchPattern,
-        excludePattern: t.match!.exclude ?? null,
-        expectReachable: t.expect.reachable ?? null,
-        expectGuards: t.expect.guards ?? null,
-        expectMinCallers: t.expect.called_by?.min ?? null,
+        excludePattern: t.match!.exclude ?? undefined,
+        expectReachable: t.expect.reachable ?? undefined,
+        expectGuards: t.expect.guards ?? undefined,
+        expectMinCallers: t.expect.called_by?.min ?? undefined,
       };
     }
 

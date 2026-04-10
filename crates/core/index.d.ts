@@ -34,15 +34,15 @@ export interface GraphEdgeData {
 export interface SpecTest {
   name: string
   testType: string
-  fromId: string | null
-  throughIds: string[] | null
-  toId: string | null
-  matchType: string | null
-  matchPattern: string | null
-  excludePattern: string | null
-  expectReachable: boolean | null
-  expectGuards: string[] | null
-  expectMinCallers: number | null
+  fromId?: string
+  throughIds?: string[]
+  toId?: string
+  matchType?: string
+  matchPattern?: string
+  excludePattern?: string
+  expectReachable?: boolean
+  expectGuards?: string[]
+  expectMinCallers?: number
 }
 
 export interface TestResult {

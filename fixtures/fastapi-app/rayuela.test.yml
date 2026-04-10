@@ -1,0 +1,23 @@
+version: 1
+
+tests:
+  - name: "Auth endpoints are public"
+    match: { type: endpoint, pattern: "/api/v1/auth/*" }
+    expect:
+      guards: []
+
+  - name: "Item endpoints require authentication"
+    match: { type: endpoint, pattern: "/api/v1/items*" }
+    expect:
+      guards: [authenticated]
+
+  - name: "Health check is public"
+    path:
+      from: { endpoint: "GET /health" }
+    expect:
+      guards: []
+
+  - name: "No debug endpoints exist"
+    match: { endpoint: "/debug/*" }
+    expect:
+      reachable: false
