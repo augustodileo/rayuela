@@ -315,8 +315,8 @@ export async function buildCallTreeDeterministic(
  */
 async function resolveClassMethod(
   resolver: NameResolverLike,
-  parseFile: (f: string) => unknown,
-  queryTree: (tree: unknown, q: string) => Array<{ captures: Record<string, { text: string; startLine: number; startCol: number }> }>,
+  parseFile: any,
+  queryTree: any,
   fromFile: string,
   fromLine: number,
   className: string,
@@ -339,7 +339,7 @@ async function resolveClassMethod(
   try { classTree = parseFile(classDef.file); } catch { return null; }
 
   const methodDefs = queryTree(classTree, PY_CLASS_METHOD_DEF)
-    .filter(m =>
+    .filter((m: any) =>
       m.captures["class_name"]?.text === className &&
       m.captures["method_name"]?.text === methodName
     );

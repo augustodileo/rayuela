@@ -30,8 +30,10 @@ export function toLspPosition(pos: SourcePosition): { line: number; character: n
 
 /** Convert a file path to LSP URI */
 export function toUri(filePath: string): string {
-  const resolved = filePath.startsWith("/") ? filePath : require("path").resolve(filePath);
-  return `file://${resolved}`;
+  // Absolute paths start with /, relative paths need resolving
+  if (filePath.startsWith("/")) return `file://${filePath}`;
+  // For relative paths, use process.cwd() since we can't import path in all contexts
+  return `file://${process.cwd()}/${filePath}`;
 }
 
 /** Convert LSP URI to file path */

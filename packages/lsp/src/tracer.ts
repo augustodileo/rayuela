@@ -73,9 +73,9 @@ export async function buildCallTreeViaDefinitions(
   // The match only covers the captures, not the full function body.
   // Find the next function to determine this function's end line.
   const allFnLines = fns
-    .map(m => m.captures["fn_name"]?.startLine)
-    .filter((l): l is number => !!l)
-    .sort((a, b) => a - b);
+    .map((m: any) => m.captures["fn_name"]?.startLine)
+    .filter((l: any): l is number => !!l)
+    .sort((a: number, b: number) => a - b);
   const fnIdx = allFnLines.indexOf(fnLine);
   const fnEndLine = fnIdx >= 0 && fnIdx < allFnLines.length - 1
     ? allFnLines[fnIdx + 1] - 1
@@ -98,7 +98,7 @@ export async function buildCallTreeViaDefinitions(
 
   // Find method calls in this function's range
   const methodCalls = queryTree(tree, methodQuery)
-    .filter(m => {
+    .filter((m: any) => {
       const line = m.captures["call_method"]?.startLine;
       return line && line >= fnLine && line <= fnEndLine;
     });
@@ -118,7 +118,7 @@ export async function buildCallTreeViaDefinitions(
 
   // Find direct function calls
   const funcCalls = queryTree(tree, funcQuery)
-    .filter(m => {
+    .filter((m: any) => {
       const line = m.captures["call_func"]?.startLine;
       return line && line >= fnLine && line <= fnEndLine;
     });
@@ -148,8 +148,8 @@ async function resolveAndRecurse(
   sourceDir: string,
   depth: number,
   visited: Set<string>,
-  parseFile: (f: string) => unknown,
-  queryTree: (tree: unknown, q: string) => Array<{ captures: Record<string, { text: string; startLine: number; startCol: number }>; startLine: number; endLine: number }>,
+  parseFile: any,
+  queryTree: any,
 ): Promise<CallTreeNode | null> {
   const def = await resolveDefinition(client, { file, line, col });
   if (!def) return { name, file, line, children: [] };
