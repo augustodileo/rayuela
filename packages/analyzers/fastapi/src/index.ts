@@ -53,7 +53,7 @@ export const fastapiAnalyzer: Analyzer = {
     }
   },
 
-  async analyze(sourceDir: string): Promise<AnalysisResult> {
+  async analyze(sourceDir: string, resolver?: unknown): Promise<AnalysisResult> {
     const nodes: GraphNode[] = [];
     const edges: GraphEdge[] = [];
     const warnings: AnalysisWarning[] = [];

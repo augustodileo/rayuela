@@ -18,7 +18,7 @@ export const expoRouterAnalyzer: Analyzer = {
     }
   },
 
-  async analyze(sourceDir: string): Promise<AnalysisResult> {
+  async analyze(sourceDir: string, _resolver?: unknown): Promise<AnalysisResult> {
     const nodes: GraphNode[] = [];
     const edges: GraphEdge[] = [];
 

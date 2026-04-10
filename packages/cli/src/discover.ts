@@ -1,3 +1,4 @@
+import { NameResolver } from "rayuela-core";
 import { detectPlugins } from "./plugins.js";
 import { formatDiscovery } from "./formatters/text.js";
 import { linkApiCalls } from "./linker.js";
@@ -9,10 +10,18 @@ export async function runDiscover(sourceDirs: string[]): Promise<void> {
   const detectedNames = new Set<string>();
 
   for (const sourceDir of sourceDirs) {
+    // Build Stack Graphs resolver for this source directory
+    let resolver: InstanceType<typeof NameResolver> | undefined;
+    try {
+      resolver = NameResolver.build(sourceDir);
+    } catch (e) {
+      console.log(`  WARN  Failed to build name resolver for ${sourceDir}: ${e}`);
+    }
+
     const plugins = await detectPlugins(sourceDir);
     for (const plugin of plugins) {
       detectedNames.add(plugin.name);
-      const result = await plugin.analyze(sourceDir);
+      const result = await plugin.analyze(sourceDir, resolver);
       allNodes.push(...result.nodes);
       allEdges.push(...result.edges);
 

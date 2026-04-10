@@ -1,4 +1,4 @@
-import { AppGraph, validateSpec as validateSpecRust } from "rayuela-core";
+import { AppGraph, NameResolver, validateSpec as validateSpecRust } from "rayuela-core";
 import { detectPlugins } from "./plugins.js";
 import { loadSpec } from "./spec-loader.js";
 import { formatTestResults } from "./formatters/text.js";
@@ -12,10 +12,18 @@ export async function runTest(sourceDirs: string[], specPath: string): Promise<b
 
   // Collect all nodes and edges from all source dirs
   for (const sourceDir of sourceDirs) {
+    // Build Stack Graphs resolver for this source directory
+    let resolver: InstanceType<typeof NameResolver> | undefined;
+    try {
+      resolver = NameResolver.build(sourceDir);
+    } catch (e) {
+      console.log(`  WARN  Failed to build name resolver for ${sourceDir}: ${e}`);
+    }
+
     const plugins = await detectPlugins(sourceDir);
     for (const plugin of plugins) {
       detectedNames.add(plugin.name);
-      const result = await plugin.analyze(sourceDir);
+      const result = await plugin.analyze(sourceDir, resolver);
       allNodes.push(...result.nodes);
       allEdges.push(...result.edges);
     }

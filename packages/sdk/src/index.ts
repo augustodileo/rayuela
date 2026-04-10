@@ -34,5 +34,5 @@ export interface AnalysisResult {
 export interface Analyzer {
   name: string;
   detect(sourceDir: string): Promise<boolean>;
-  analyze(sourceDir: string): Promise<AnalysisResult>;
+  analyze(sourceDir: string, resolver?: unknown): Promise<AnalysisResult>;
 }
