@@ -2,19 +2,34 @@ import type { CallHierarchyItem } from "vscode-languageserver-protocol";
 import { LspClient } from "./client.js";
 import { type SourcePosition, type CallTreeNode, type DefinitionResult, toLspPosition, fromUri } from "./types.js";
 
-/** Tree-sitter query: find all await method calls */
-const AWAIT_METHOD_CALL_QUERY = `
+// === Python call-site queries ===
+
+const PY_METHOD_CALL = `
 (await
   (call
     function: (attribute
       attribute: (identifier) @call_method)))
 `;
 
-/** Tree-sitter query: find all await direct function calls */
-const AWAIT_FUNC_CALL_QUERY = `
+const PY_FUNC_CALL = `
 (await
   (call
     function: (identifier) @call_func))
+`;
+
+// === TypeScript/JavaScript call-site queries ===
+
+/** method.call() — e.g., rolls.list(), api.items.get() */
+const TS_METHOD_CALL = `
+(call_expression
+  function: (member_expression
+    property: (property_identifier) @call_method))
+`;
+
+/** func() — e.g., useRolls(), useAuthStore() */
+const TS_FUNC_CALL = `
+(call_expression
+  function: (identifier) @call_func)
 `;
 
 /**
@@ -37,8 +52,12 @@ export async function buildCallTreeViaDefinitions(
   let tree;
   try { tree = parseFile(position.file); } catch { return null; }
 
-  // Find the function at this position
-  const fnQuery = `(function_definition name: (identifier) @fn_name)`;
+  // Find the function at this position (Python or TypeScript)
+  const isPython = position.file.endsWith(".py");
+  const fnQuery = isPython
+    ? `(function_definition name: (identifier) @fn_name)`
+    : `[(function_declaration name: (identifier) @fn_name)
+       (export_default_declaration (function_declaration name: (identifier) @fn_name))]`;
   const fns = queryTree(tree, fnQuery);
   const fn = fns.reduce((best: typeof fns[0] | null, m) => {
     const line = m.captures["fn_name"]?.startLine;
@@ -73,8 +92,12 @@ export async function buildCallTreeViaDefinitions(
   const visited = new Set<string>();
   visited.add(`${position.file}:${position.line}`);
 
-  // Find await method calls in this function's range
-  const methodCalls = queryTree(tree, AWAIT_METHOD_CALL_QUERY)
+  // Select queries based on file type (isPython declared earlier)
+  const methodQuery = isPython ? PY_METHOD_CALL : TS_METHOD_CALL;
+  const funcQuery = isPython ? PY_FUNC_CALL : TS_FUNC_CALL;
+
+  // Find method calls in this function's range
+  const methodCalls = queryTree(tree, methodQuery)
     .filter(m => {
       const line = m.captures["call_method"]?.startLine;
       return line && line >= fnLine && line <= fnEndLine;
@@ -93,8 +116,8 @@ export async function buildCallTreeViaDefinitions(
     if (child) rootNode.children.push(child);
   }
 
-  // Find await direct function calls
-  const funcCalls = queryTree(tree, AWAIT_FUNC_CALL_QUERY)
+  // Find direct function calls
+  const funcCalls = queryTree(tree, funcQuery)
     .filter(m => {
       const line = m.captures["call_func"]?.startLine;
       return line && line >= fnLine && line <= fnEndLine;

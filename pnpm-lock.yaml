@@ -10,6 +10,9 @@ importers:
 
   packages/analyzers/expo-router:
     dependencies:
+      '@rayuela/lsp':
+        specifier: workspace:*
+        version: link:../../lsp
       '@rayuela/sdk':
         specifier: workspace:*
         version: link:../../sdk

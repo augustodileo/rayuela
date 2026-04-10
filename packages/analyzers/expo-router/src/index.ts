@@ -25,14 +25,21 @@ export const expoRouterAnalyzer: Analyzer = {
     const edges: GraphEdge[] = [];
     const lspClient = context?.lspClient;
 
-    // Try LSP-first for API call resolution, fall back to tree-sitter parsing
-    const apiMapping = lspClient
-      ? await resolveApiMappingViaLsp(sourceDir, lspClient)
-      : await resolveApiMappingViaParsing(sourceDir);
-
+    // Parse API client for endpoint mapping
+    const apiMapping = await resolveApiMappingViaParsing(sourceDir);
     const apiModules = new Set<string>(["api"]);
-    for (const key of apiMapping.keys()) {
-      apiModules.add(key.split(".")[0]);
+    for (const key of apiMapping.keys()) apiModules.add(key.split(".")[0]);
+
+    // If LSP available, open all TS files for warm-up
+    if (lspClient) {
+      const tsFiles = await glob("**/*.{ts,tsx}", {
+        cwd: sourceDir, absolute: true,
+        ignore: ["**/node_modules/**", "**/*.test.*"],
+      });
+      for (const f of tsFiles) {
+        await (lspClient as any).openFile(f, "typescript");
+      }
+      await new Promise(r => setTimeout(r, 3000));
     }
 
     const screens = await discoverScreens(sourceDir);
@@ -49,31 +56,35 @@ export const expoRouterAnalyzer: Analyzer = {
         metadata: { route: screen.route },
       });
 
-      // When LSP is available, use call hierarchy to find ALL calls from this screen
-      // (including through hooks like useRolls → rolls.list)
+      // When LSP available, use definition-based tracing to follow hooks → API calls
       if (lspClient) {
         try {
-          const lspEdges = await resolveScreenCallsViaLsp(
-            screen.file, screen.name, lspClient, apiMapping,
+          const lspEdges = await traceScreenCallsViaLsp(
+            screen.file, screen.name, lspClient, apiMapping, sourceDir,
           );
-          edges.push(...lspEdges);
+          if (lspEdges.length > 0) {
+            edges.push(...lspEdges);
+            continue; // Skip tree-sitter fallback
+          }
         } catch {
-          // LSP failed — fall back to tree-sitter
-          addTreeSitterEdges(screen, edges, apiMapping, apiModules);
+          // Fall through to tree-sitter
         }
-      } else {
-        addTreeSitterEdges(screen, edges, apiMapping, apiModules);
       }
 
-      // Navigation edges (always tree-sitter — these are syntactic)
+      // Fallback: tree-sitter based detection
+      const apiCalls = detectApiCalls(screen.file, screen.name, apiModules);
+      for (const call of apiCalls) {
+        const resolved = apiMapping.get(call.to);
+        edges.push(resolved ? { ...call, to: resolved } : call);
+      }
+
+      // Navigation edges
       const navigations = detectNavigations(screen.file, screen.name);
       for (const nav of navigations) {
-        const targetScreen = screens.find(
+        const target = screens.find(
           (s) => s.route === nav.to || nav.to.startsWith(s.route.replace(/:[\w]+/g, ""))
         );
-        if (targetScreen) {
-          edges.push({ ...nav, to: targetScreen.name });
-        }
+        if (target) edges.push({ ...nav, to: target.name });
       }
     }
 
@@ -82,53 +93,40 @@ export const expoRouterAnalyzer: Analyzer = {
 };
 
 /**
- * LSP-first: Use call hierarchy on the screen's default export function
- * to find ALL outgoing calls (including through hooks).
- * Then match each call against the API mapping.
+ * LSP-based: use buildCallTreeViaDefinitions to follow hooks → API calls.
  */
-async function resolveScreenCallsViaLsp(
+async function traceScreenCallsViaLsp(
   screenFile: string,
   screenName: string,
   lspClient: unknown,
   apiMapping: Map<string, string>,
+  sourceDir: string,
 ): Promise<GraphEdge[]> {
-  const { buildCallTree, flattenCallTree } = await import("@rayuela/lsp");
-  const client = lspClient as Awaited<ReturnType<typeof import("@rayuela/lsp").getClient>>;
-  if (!client) return [];
-
-  // Build call tree from the screen's default export (line 1 is usually imports,
-  // the actual component is further down — use a broad search)
-  // Open the file first
-  await client.openFile(screenFile, "typescript");
-
-  // Try to get call hierarchy from the default export function
-  // The exported component is typically the last function in the file
+  const { buildCallTreeViaDefinitions, flattenCallTree } = await import("@rayuela/lsp");
   const { parseFile, queryTree } = await import("rayuela-core");
+  const absSourceDir = path.resolve(sourceDir);
+
   const tree = parseFile(screenFile);
 
-  // Find the default export function position
-  const exportMatches = queryTree(tree, `
-    (export_statement
-      (function_declaration
-        name: (identifier) @fn_name))
-  `);
+  // Find the default export function
   const defaultExport = queryTree(tree, `
     (export_default_declaration
       (function_declaration
         name: (identifier) @fn_name))
   `);
-  const fnMatch = defaultExport[0] || exportMatches[0];
+  const fnMatch = defaultExport[0];
   if (!fnMatch) return [];
 
-  const fnLine = fnMatch.startLine;
-  const fnCol = fnMatch.captures["fn_name"]?.startCol ?? 0;
+  const fnLine = fnMatch.captures["fn_name"]?.startLine;
+  if (!fnLine) return [];
 
-  const callTree = await buildCallTree(client, {
-    file: screenFile,
-    line: fnLine,
-    col: fnCol,
-  }, 4);
-
+  // Build call tree via definition resolution
+  const callTree = await buildCallTreeViaDefinitions(
+    lspClient as any,
+    { file: screenFile, line: fnLine, col: fnMatch.captures["fn_name"]?.startCol ?? 0 },
+    absSourceDir,
+    4,
+  );
   if (!callTree) return [];
 
   const allCalls = flattenCallTree(callTree);
@@ -136,20 +134,16 @@ async function resolveScreenCallsViaLsp(
   const seen = new Set<string>();
 
   for (const call of allCalls) {
-    if (call.name === callTree.name) continue; // Skip self
-    if (call.file.includes("node_modules")) continue; // Skip library internals
+    if (call.name === callTree.name) continue;
 
-    // Check if this call matches any API function
+    // Match against API mapping
     for (const [key, endpointId] of apiMapping) {
       const methodName = key.split(".").pop();
       if (call.name === methodName && !seen.has(endpointId)) {
         seen.add(endpointId);
         edges.push({
-          type: "calls",
-          from: screenName,
-          to: endpointId,
-          source: { file: call.file, line: call.line },
-          conditions: [],
+          type: "calls", from: screenName, to: endpointId,
+          source: { file: call.file, line: call.line }, conditions: [],
         });
       }
     }
@@ -158,65 +152,27 @@ async function resolveScreenCallsViaLsp(
   return edges;
 }
 
-/**
- * Fallback: tree-sitter based API call detection + client parsing.
- */
-function addTreeSitterEdges(
-  screen: { file: string; name: string },
-  edges: GraphEdge[],
-  apiMapping: Map<string, string>,
-  apiModules: Set<string>,
-) {
-  const apiCalls = detectApiCalls(screen.file, screen.name, apiModules);
-  for (const call of apiCalls) {
-    const resolved = apiMapping.get(call.to);
-    edges.push(resolved ? { ...call, to: resolved } : call);
-  }
-}
-
-/**
- * LSP-first API mapping: Use LSP definition resolution on API imports.
- * Falls back to tree-sitter parsing if LSP can't resolve.
- */
-async function resolveApiMappingViaLsp(
-  sourceDir: string,
-  _lspClient: unknown,
-): Promise<Map<string, string>> {
-  // For now, use tree-sitter parsing as the base.
-  // LSP enhancement: when we find an unresolved call, use LSP definition
-  // to follow it to the API client and extract the URL.
-  // This hybrid approach gets the best of both worlds.
-  return resolveApiMappingViaParsing(sourceDir);
-}
-
-/**
- * Tree-sitter based API client parsing (fallback).
- */
 async function resolveApiMappingViaParsing(sourceDir: string): Promise<Map<string, string>> {
   const candidates = [
-    "lib/api.ts", "lib/api.tsx", "src/api.ts", "src/api.tsx",
-    "src/lib/api.ts", "api/index.ts", "services/api.ts",
+    "lib/api.ts", "lib/api.tsx", "src/api.ts", "services/api.ts",
   ];
-
-  for (const candidate of candidates) {
+  for (const c of candidates) {
     try {
-      const endpoints = parseApiClient(path.join(sourceDir, candidate));
-      if (endpoints.length > 0) return buildApiMapping(endpoints);
+      const eps = parseApiClient(path.join(sourceDir, c));
+      if (eps.length > 0) return buildApiMapping(eps);
     } catch { /* next */ }
   }
 
-  const apiFiles = await glob("**/api.{ts,tsx,js}", {
+  const files = await glob("**/api.{ts,tsx,js}", {
     cwd: sourceDir, absolute: true,
     ignore: ["**/node_modules/**", "**/*.test.*"],
   });
-
-  for (const file of apiFiles) {
+  for (const f of files) {
     try {
-      const endpoints = parseApiClient(file);
-      if (endpoints.length > 0) return buildApiMapping(endpoints);
+      const eps = parseApiClient(f);
+      if (eps.length > 0) return buildApiMapping(eps);
     } catch { /* next */ }
   }
-
   return new Map();
 }
 
