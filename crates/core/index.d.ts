@@ -1,4 +1,4 @@
-/* auto-generated napi type definitions */
+/* napi type definitions for rayuela-core */
 
 export interface CaptureInfo {
   text: string
@@ -59,6 +59,12 @@ export interface TestFailure {
   line: number
 }
 
+export interface SymbolLocation {
+  file: string
+  line: number
+  symbol: string
+}
+
 export class ParseResult {}
 
 export function parseFile(filePath: string): ParseResult
@@ -81,3 +87,9 @@ export class AppGraph {
 }
 
 export function validateSpec(graph: AppGraph, tests: SpecTest[]): TestResult[]
+
+export class NameResolver {
+  static build(sourceDir: string): NameResolver
+  findDefinition(symbol: string, file: string, line: number): SymbolLocation | null
+  findReferences(symbol: string, file: string): SymbolLocation[]
+}

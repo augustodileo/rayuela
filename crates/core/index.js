@@ -31,3 +31,4 @@ exports.getLanguageName = nativeBinding.getLanguageName
 exports.validateSpec = nativeBinding.validateSpec
 exports.ParseResult = nativeBinding.ParseResult
 exports.AppGraph = nativeBinding.AppGraph
+exports.NameResolver = nativeBinding.NameResolver
